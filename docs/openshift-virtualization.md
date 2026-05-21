@@ -1,6 +1,10 @@
 # Using the golden image in OpenShift Virtualization
 
-The build produces a **sysprepped**, **UEFI (OVMF)** **qcow2** image with VirtIO disk/network and the QEMU guest agent installed. Import it as a DataVolume or containerized disk, then create a `VirtualMachine` that uses UEFI and VirtIO.
+The build produces a **sysprepped** **qcow2** image with VirtIO disk/network and the QEMU guest agent installed.
+
+**Firmware:** The default Packer build uses SeaBIOS for install reliability on QEMU 10. For **UEFI** disks (typical OpenShift Virtualization VMs), use [uefi-install.md](uefi-install.md) and verify the image boots with UEFI in your cluster before production rollout.
+
+Import the disk as a DataVolume or containerized disk, then create a `VirtualMachine` with **UEFI** and VirtIO (if your image was built with the UEFI path).
 
 ## Import qcow2
 
@@ -27,7 +31,7 @@ Use `virtctl image-upload` or your cluster's documented import path to load `win
 
 ## VirtualMachine hints
 
-- **Firmware**: UEFI (matches OVMF build)
+- **Firmware**: UEFI (use the virt-install UEFI base disk, or confirm your Packer-built image boots with UEFI in a test VM)
 - **Disk bus**: VirtIO
 - **Network**: masquerade/bridge with **VirtIO** model
 - **QEMU guest agent**: enabled on the VM spec so node operations work

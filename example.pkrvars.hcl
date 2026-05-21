@@ -4,8 +4,19 @@
 windows_version = "2022"
 windows_edition = "Standard"
 
-windows_iso_path    = "/path/to/windows-server.iso"
+# --- Windows Server 2022 ---
+windows_iso_path_2022 = "/path/to/windows-server-2022.iso"
+# product_key_2022      = "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+
+# --- Windows Server 2025 ---
+windows_iso_path_2025 = "/path/to/windows-server-2025.iso"
+# product_key_2025      = "YYYYY-YYYYY-YYYYY-YYYYY-YYYYY"
+
 virtio_win_iso_path = "/path/to/virtio-win.iso"
+
+# Phase 1 install bus (ide = reliable unattend; virtio installed in phase 2 via WinRM)
+install_disk_interface = "ide"
+install_net_device     = "e1000"
 
 admin_password = "ChangeMe-Use-A-Strong-Password!"
 
@@ -22,6 +33,9 @@ vm_memory        = 8192
 disk_size        = "80G"
 headless         = true
 
-# Fedora/RHEL OVMF paths (adjust for Debian/Ubuntu: ovmf package)
-ovmf_code_path = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
-ovmf_vars_path  = "/usr/share/edk2/ovmf/OVMF_VARS.fd"
+# Leave false on Fedora/QEMU 10 — SeaBIOS boots the Windows ISO reliably. See docs/uefi-install.md.
+efi_boot = false
+
+# Only used when efi_boot = true (Packer enables UEFI if these are wired in unconditionally).
+# ovmf_code_path = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
+# ovmf_vars_path  = "/usr/share/edk2/ovmf/OVMF_VARS.fd"

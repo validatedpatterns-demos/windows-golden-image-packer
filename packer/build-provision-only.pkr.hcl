@@ -1,46 +1,25 @@
-# Phase 1: unattended Windows Setup (IDE disk + e1000 — no VirtIO required in WinPE).
-# Phase 2: WinRM provisioners install VirtIO, QEMU-GA, OpenSSH, then sysprep.
+# Optional pass 2: boot an existing qcow2 (after a failed or partial build) and run provisioners + sysprep only.
+# Usage:
+#   make build-install          # stops before sysprep; writes output/*-install.qcow2
+#   make build-provision-only BASE_IMAGE=output/windows-server-2022-standard-install.qcow2
 
-source "qemu" "windows" {
-  vm_name          = local.vm_name
+source "qemu" "from_install" {
+  vm_name          = "${local.vm_name}-provision"
   output_directory = var.output_directory
   accelerator      = var.qemu_accelerator
   cpus             = var.vm_cpus
   memory           = var.vm_memory
   headless         = var.headless
-  format           = "qcow2"
-  disk_size        = var.disk_size
+  disk_image       = true
+  iso_url          = var.base_image_path # qcow2 from make build-install
+  iso_checksum     = "none"
   disk_interface   = var.install_disk_interface
-  disk_cache       = "writeback"
   net_device       = var.install_net_device
   machine_type     = local.install_machine_type
   cpu_model        = "host"
 
-  efi_boot          = var.efi_boot
-  efi_firmware_code = var.efi_boot ? var.ovmf_code_path : ""
-  efi_firmware_vars = var.efi_boot ? var.ovmf_vars_path : ""
-
-  iso_url      = local.windows_iso_path
-  iso_checksum = "none"
-
-  floppy_content = local.autounattend_floppy
-  cd_label       = "PROVISION"
-  cd_content     = local.autounattend_cd
-  cd_files       = local.provision_cd_files
-
-  boot_wait = "15s"
-  boot_command = [
-    "<spacebar>",
-    "<wait3>",
-    "<spacebar>",
-    "<wait3>",
-    "<enter>",
-  ]
-
-  qemuargs = [
-    ["-boot", "order=cdn"],
-    ["-device", "qemu-xhci"],
-  ]
+  cd_label   = "PROVISION"
+  cd_files   = local.provision_cd_files
 
   communicator   = "winrm"
   winrm_username = var.winrm_username
@@ -54,8 +33,8 @@ source "qemu" "windows" {
 }
 
 build {
-  name    = "windows-golden-image"
-  sources = ["source.qemu.windows"]
+  name    = "windows-golden-provision-only"
+  sources = ["source.qemu.from_install"]
 
   provisioner "file" {
     destination = "C:/Windows/Temp/"
@@ -84,7 +63,6 @@ build {
   post-processor "shell-local" {
     inline = [
       "OUTPUT_DIR='${var.output_directory}'",
-      "VM_NAME='${local.vm_name}'",
       "TARGET='${local.output_image_name}'",
       "FOUND=$(find \"$OUTPUT_DIR\" -maxdepth 1 -name \"*.qcow2\" -type f | head -1)",
       "if [ -z \"$FOUND\" ]; then echo \"No qcow2 found in $OUTPUT_DIR\" >&2; exit 1; fi",

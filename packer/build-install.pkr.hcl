@@ -1,8 +1,9 @@
-# Phase 1: unattended Windows Setup (IDE disk + e1000 — no VirtIO required in WinPE).
-# Phase 2: WinRM provisioners install VirtIO, QEMU-GA, OpenSSH, then sysprep.
+# Pass 1 only: unattended Windows install, then shut down (no VirtIO provisioners, no sysprep).
+# Use with: make build-install
+# Then:     make build-provision-only BASE_IMAGE=output/windows-server-2022-standard-install.qcow2
 
-source "qemu" "windows" {
-  vm_name          = local.vm_name
+source "qemu" "install" {
+  vm_name          = "${local.vm_name}-install"
   output_directory = var.output_directory
   accelerator      = var.qemu_accelerator
   cpus             = var.vm_cpus
@@ -49,47 +50,23 @@ source "qemu" "windows" {
   winrm_use_ssl  = false
   winrm_port     = 5985
 
-  shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
+  shutdown_command = "shutdown /s /t 0 /f"
   shutdown_timeout = "30m"
 }
 
 build {
-  name    = "windows-golden-image"
-  sources = ["source.qemu.windows"]
-
-  provisioner "file" {
-    destination = "C:/Windows/Temp/"
-    source      = "${path.root}/../scripts/"
-  }
-
-  provisioner "file" {
-    destination = "C:/Windows/Temp/"
-    source      = "${path.root}/../drivers"
-  }
-
-  provisioner "powershell" {
-    environment_vars = [
-      "WINRM_PASSWORD=${var.admin_password}",
-      "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
-    ]
-    scripts = [
-      "${path.root}/../scripts/01-install-virtio-drivers.ps1",
-      "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
-      "${path.root}/../scripts/03-configure-openssh.ps1",
-      "${path.root}/../scripts/04-set-administrator-password.ps1",
-      "${path.root}/../scripts/05-inject-ssh-keys.ps1",
-    ]
-  }
+  name    = "windows-install-only"
+  sources = ["source.qemu.install"]
 
   post-processor "shell-local" {
     inline = [
       "OUTPUT_DIR='${var.output_directory}'",
-      "VM_NAME='${local.vm_name}'",
-      "TARGET='${local.output_image_name}'",
+      "TARGET='${replace(local.output_image_name, ".qcow2", "-install.qcow2")}'",
       "FOUND=$(find \"$OUTPUT_DIR\" -maxdepth 1 -name \"*.qcow2\" -type f | head -1)",
       "if [ -z \"$FOUND\" ]; then echo \"No qcow2 found in $OUTPUT_DIR\" >&2; exit 1; fi",
       "mv -f \"$FOUND\" \"$OUTPUT_DIR/$TARGET\"",
-      "echo \"Golden image: $OUTPUT_DIR/$TARGET\"",
+      "echo \"Install disk (pass 1): $OUTPUT_DIR/$TARGET\"",
+      "echo \"Next: make build-provision-only BASE_IMAGE=$OUTPUT_DIR/$TARGET\"",
     ]
   }
 }

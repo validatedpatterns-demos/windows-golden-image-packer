@@ -2,7 +2,8 @@
 # Download virtio-win ISO for QEMU/KubeVirt Windows builds.
 set -euo pipefail
 
-DEST_DIR="${DEST_DIR:-$(cd "$(dirname "$0")/.." && pwd)/downloads}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DEST_DIR="${DEST_DIR:-$ROOT/downloads}"
 mkdir -p "$DEST_DIR"
 
 download_virtio() {
@@ -26,7 +27,11 @@ download_virtio() {
   fi
 
   echo "Downloaded: $dest"
-  echo "Set virtio_win_iso_path = \"$dest\" in build.pkrvars.hcl"
+  echo "Set virtio_win_iso_path = \"$dest\" in build.pkrvars.hcl (used for staging drivers/ only)"
+
+  if [[ -x "$ROOT/scripts/stage-virtio-drivers.sh" ]]; then
+    "$ROOT/scripts/stage-virtio-drivers.sh" "$dest"
+  fi
 }
 
 case "${1:-virtio}" in

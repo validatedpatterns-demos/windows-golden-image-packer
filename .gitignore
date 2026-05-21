@@ -10,6 +10,14 @@ packer-manifest.json
 
 # ISOs and large downloads (provide paths via .pkrvars.hcl)
 *.iso
+downloads/
+
+# VirtIO driver trees (created by: make stage-virtio; do not commit)
+drivers/
+drivers.orphan.*/
+extras/virtio-win-staged/
+extras/virtio-win-staged.orphan.*/
+extras/.virtio-win-staged.ready
 virtio-win/
 
 # Secrets (keep example and CI validate vars in-repo)

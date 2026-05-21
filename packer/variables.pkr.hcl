@@ -20,14 +20,41 @@ variable "windows_edition" {
   }
 }
 
-variable "windows_iso_path" {
+variable "efi_boot" {
+  type        = bool
+  description = "Use UEFI/OVMF for install. On Fedora with QEMU 10, leave false. Packer enables UEFI if efi_firmware_* paths are set in build.pkr.hcl even when this is false."
+  default     = false
+}
+
+variable "windows_iso_path_2022" {
   type        = string
-  description = "Path to the Windows Server installation ISO."
+  description = "Path to the Windows Server 2022 installation ISO (used when windows_version = 2022)."
+  default     = ""
+}
+
+variable "windows_iso_path_2025" {
+  type        = string
+  description = "Path to the Windows Server 2025 installation ISO (used when windows_version = 2025)."
+  default     = ""
 }
 
 variable "virtio_win_iso_path" {
   type        = string
   description = "Path to the virtio-win ISO (Fedora Project virtio-win)."
+}
+
+variable "product_key_2022" {
+  type        = string
+  description = "Optional product key for Windows Server 2022 installs (MAK, KMS, or GVLK). Leave empty to skip."
+  default     = ""
+  sensitive   = true
+}
+
+variable "product_key_2025" {
+  type        = string
+  description = "Optional product key for Windows Server 2025 installs (MAK, KMS, or GVLK). Leave empty to skip."
+  default     = ""
+  sensitive   = true
 }
 
 variable "admin_password" {
@@ -74,6 +101,34 @@ variable "disk_size" {
   type        = string
   description = "Root disk size, e.g. 80G."
   default     = "80G"
+}
+
+variable "install_disk_interface" {
+  type        = string
+  description = "Disk bus during Windows Setup (phase 1). Use ide so WinPE can partition without VirtIO drivers; virtio is installed in phase 2 (WinRM)."
+  default     = "ide"
+
+  validation {
+    condition     = contains(["ide", "sata", "virtio", "virtio-scsi"], var.install_disk_interface)
+    error_message = "The install_disk_interface variable must be ide, sata, virtio, or virtio-scsi."
+  }
+}
+
+variable "base_image_path" {
+  type        = string
+  description = "Pass 2 only (build-provision-only): qcow2 from make build-install."
+  default     = ""
+}
+
+variable "install_net_device" {
+  type        = string
+  description = "NIC model during install and provisioning. e1000 works without VirtIO network drivers in WinPE."
+  default     = "e1000"
+
+  validation {
+    condition     = contains(["e1000", "rtl8139", "virtio-net", "virtio"], var.install_net_device)
+    error_message = "The install_net_device variable must be e1000, rtl8139, virtio-net, or virtio."
+  }
 }
 
 variable "headless" {

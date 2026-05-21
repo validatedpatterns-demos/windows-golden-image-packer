@@ -1,28 +1,46 @@
 # Install QEMU Guest Agent (required for OpenShift Virtualization / KubeVirt guest management).
 $ErrorActionPreference = 'Stop'
 
-function Find-VirtioIsoDrive {
-    $candidates = Get-Volume -ErrorAction SilentlyContinue |
+function Get-CdRomDriveLetters {
+    $letters = @()
+    Get-Volume -ErrorAction SilentlyContinue |
         Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.DriveLetter } |
-        ForEach-Object { "$($_.DriveLetter):" }
+        ForEach-Object { $letters += "$($_.DriveLetter):" }
+    Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriveType -eq 5 -and $_.DeviceID } |
+        ForEach-Object { $letters += $_.DeviceID }
+    return $letters | Select-Object -Unique
+}
 
-    foreach ($drive in $candidates) {
-        if (Test-Path "$drive\guest-agent") { return $drive }
-        if (Test-Path "$drive\virtio-win-gt-x64.exe") { return $drive }
+function Find-GuestAgentMsi {
+    $msiNames = @('qemu-ga-x86_64.msi', 'qemu-ga-x64.msi')
+    $roots = @(
+        'C:\Windows\Temp\drivers\guest-agent',
+        'C:\Windows\Temp\virtio-drivers\guest-agent'
+    )
+
+    foreach ($drive in (Get-CdRomDriveLetters)) {
+        $roots += (Join-Path $drive 'guest-agent')
+        $roots += (Join-Path $drive 'drivers\guest-agent')
+        $roots += (Join-Path $drive 'virtio-win-staged\guest-agent')
+        $roots += $drive
     }
-    throw 'virtio-win ISO not found on any CD-ROM drive letter.'
+
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        foreach ($name in $msiNames) {
+            $path = Join-Path $root $name
+            if (Test-Path $path) { return $path }
+        }
+    }
+
+    throw @(
+        'QEMU Guest Agent MSI not found (WinRM staging or PROVISION CD).'
+        "CD-ROM(s): $((Get-CdRomDriveLetters) -join ', ')."
+        'Run: STAGE_FORCE=1 make stage-virtio && make build.'
+    ) -join ' '
 }
 
-$isoDrive = Find-VirtioIsoDrive
-$msiCandidates = @(
-    (Join-Path $isoDrive 'guest-agent\qemu-ga-x86_64.msi'),
-    (Join-Path $isoDrive 'guest-agent\qemu-ga-x64.msi')
-)
-
-$msi = $msiCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $msi) {
-    throw "QEMU Guest Agent MSI not found under $isoDrive\guest-agent"
-}
+$msi = Find-GuestAgentMsi
 
 Write-Host "Installing QEMU Guest Agent from $msi"
 Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -NoNewWindow
