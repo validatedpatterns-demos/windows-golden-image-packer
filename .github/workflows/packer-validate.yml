@@ -1,0 +1,32 @@
+name: Packer validate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.11.2"
+
+      - name: Create CI stub ISO paths
+        run: |
+          rm -rf ci-output
+          touch ci-stub.iso
+
+      - name: Packer init
+        run: packer init .
+
+      - name: Packer validate
+        run: packer validate -var-file=ci.pkrvars.hcl .

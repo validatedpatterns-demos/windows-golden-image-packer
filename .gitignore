@@ -1,0 +1,28 @@
+# Build artifacts
+output/
+*.qcow2
+*.qcow2.*
+packer/packer_cache/
+packer/ci-output/
+packer/ci-stub.iso
+packer_cache/
+packer-manifest.json
+
+# ISOs and large downloads (provide paths via .pkrvars.hcl)
+*.iso
+virtio-win/
+
+# Secrets (keep example and CI validate vars in-repo)
+*.pkrvars.hcl
+!example.pkrvars.hcl
+!packer/ci.pkrvars.hcl
+
+# Packer
+.packer.d/
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
