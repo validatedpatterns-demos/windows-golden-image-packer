@@ -9,7 +9,8 @@ BASE_IMAGE        ?=
 # Optional Quay publish (see example.quay.env, docs/quay-publish.md)
 QUAY_ENV          ?= quay.env
 PUSH_QUAY         ?= 0
-GOLDEN_QCOW2      ?= $(firstword $(wildcard output/windows-server-*.qcow2))
+# Packer may write to output/ (../output) or packer/output/ (./output in build.pkrvars.hcl)
+GOLDEN_QCOW2      ?=
 
 # Run from packer/ on "." so variables.pkr.hcl + locals.pkr.hcl load; -only must be the full build id (packer 1.11+).
 PACKER_ONLY_GOLDEN     := -only=windows-golden-image.qemu.windows
@@ -29,7 +30,7 @@ help:
 	@echo "  build-2025             Build Windows Server 2025 Standard"
 	@echo "  download-virtio Download virtio-win ISO and stage drivers for the config CD"
 	@echo "  stage-virtio    Extract VirtIO drivers from downloads/virtio-win.iso"
-	@echo "  push-quay       Push output/*.qcow2 to Quay (configure quay.env)"
+	@echo "  push-quay       Push golden qcow2 to Quay (output/ or packer/output/)"
 	@echo "  build-push      make build then push-quay"
 	@echo "  clean           Kill Packer QEMU VMs and remove build artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
@@ -71,10 +72,12 @@ stage-virtio:
 	./scripts/stage-virtio-drivers.sh downloads/virtio-win.iso
 
 push-quay:
-	@test -n "$(GOLDEN_QCOW2)" || (echo "No golden qcow2 under output/ (run make build first)" >&2; exit 1)
-	@test -f "$(GOLDEN_QCOW2)" || (echo "qcow2 not found: $(GOLDEN_QCOW2)" >&2; exit 1)
 	@test -f "$(QUAY_ENV)" || (echo "Copy example.quay.env to $(QUAY_ENV) and set QUAY_IMAGE_* refs" >&2; exit 1)
-	QUAY_ENV_FILE="$(abspath $(QUAY_ENV))" ./scripts/push-qcow2-to-quay.sh "$(abspath $(GOLDEN_QCOW2))"
+	@qcow2="$(GOLDEN_QCOW2)"; \
+	if [ -z "$$qcow2" ]; then qcow2="$$(./scripts/find-golden-qcow2.sh)"; fi; \
+	test -f "$$qcow2" || (echo "qcow2 not found: $$qcow2" >&2; exit 1); \
+	echo "Using golden image: $$qcow2"; \
+	QUAY_ENV_FILE="$(abspath $(QUAY_ENV))" ./scripts/push-qcow2-to-quay.sh "$$(cd "$$(dirname "$$qcow2")" && pwd)/$$(basename "$$qcow2")"
 
 build-push: build push-quay
 

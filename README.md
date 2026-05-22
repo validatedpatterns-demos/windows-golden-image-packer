@@ -145,6 +145,8 @@ example.pkrvars.hcl
 
 ## Troubleshooting
 
+- **`push-quay`: No golden qcow2 under output/**: the disk may be under `packer/output/` when `output_directory = "./output"` in `build.pkrvars.hcl`. `make push-quay` searches both `output/` and `packer/output/`. Prefer `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
+
 - **Post-processor: No qcow2 found in ./output**: the QEMU builder writes `output_directory/<vm_name>` **without** a `.qcow2` suffix (e.g. `packer-win2022-standard`). The post-processor now finds that file and renames it to `windows-server-*-*.qcow2`. If a long build already finished, recover with: `mv packer/output/packer-win2022-standard output/windows-server-2022-standard.qcow2` (adjust names/paths). Use `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
 - **Interrupted or failed build**: `make clean` sends SIGTERM/SIGKILL to `qemu-system` processes whose command line includes `packer-win`, then deletes `output/`, Packer cache dirs, and partial qcow2 files. Use `make clean-force` if cleanup should continue even when a VM process could not be killed.

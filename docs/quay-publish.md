@@ -6,7 +6,7 @@ Optional step after a successful Packer build: package the qcow2 as a **KubeVirt
 
 - `podman` or `docker`
 - Registry credentials: `podman login quay.io` (or your registry host)
-- A completed golden image, e.g. `output/windows-server-2022-standard.qcow2`
+- A completed golden image, e.g. `output/windows-server-2022-standard.qcow2` or `packer/output/windows-server-2022-standard.qcow2` (depends on `output_directory` in `build.pkrvars.hcl`)
 
 ## Configure repositories
 
