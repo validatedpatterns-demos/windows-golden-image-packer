@@ -65,6 +65,15 @@ make download-virtio
 
    ```text
    output/windows-server-2022-standard.qcow2
+
+4. **Optional:** push to Quay as a KubeVirt container disk — [docs/quay-publish.md](docs/quay-publish.md):
+
+   ```bash
+   cp example.quay.env quay.env   # set QUAY_IMAGE_2022 / QUAY_IMAGE_2025
+   podman login quay.io
+   make push-quay
+   # or: PUSH_QUAY=1 make build
+   ```
    ```
 
 See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for importing the disk and VM settings.
@@ -135,6 +144,8 @@ example.pkrvars.hcl
 - Verify Windows ISO image index names if install fails at edition selection (`dism /Get-WimInfo` on the ISO).
 
 ## Troubleshooting
+
+- **Post-processor: No qcow2 found in ./output**: the QEMU builder writes `output_directory/<vm_name>` **without** a `.qcow2` suffix (e.g. `packer-win2022-standard`). The post-processor now finds that file and renames it to `windows-server-*-*.qcow2`. If a long build already finished, recover with: `mv packer/output/packer-win2022-standard output/windows-server-2022-standard.qcow2` (adjust names/paths). Use `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
 - **Interrupted or failed build**: `make clean` sends SIGTERM/SIGKILL to `qemu-system` processes whose command line includes `packer-win`, then deletes `output/`, Packer cache dirs, and partial qcow2 files. Use `make clean-force` if cleanup should continue even when a VM process could not be killed.
 

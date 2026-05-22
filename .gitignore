@@ -24,6 +24,10 @@ virtio-win/
 *.pkrvars.hcl
 !example.pkrvars.hcl
 !packer/ci.pkrvars.hcl
+quay.env
+
+# Quay push temp dirs
+.quay-push/
 
 # Packer
 .packer.d/

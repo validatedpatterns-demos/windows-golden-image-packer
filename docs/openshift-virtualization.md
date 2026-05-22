@@ -29,6 +29,8 @@ spec:
 
 Use `virtctl image-upload` or your cluster's documented import path to load `windows-server-2022-standard.qcow2`.
 
+To publish the same disk to **Quay** as a container image (optional), see [quay-publish.md](quay-publish.md).
+
 ## VirtualMachine hints
 
 - **Firmware**: UEFI (use the virt-install UEFI base disk, or confirm your Packer-built image boots with UEFI in a test VM)

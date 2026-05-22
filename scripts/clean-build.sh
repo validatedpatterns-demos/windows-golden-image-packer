@@ -102,7 +102,7 @@ remove_artifacts() {
     fi
   done
 
-  find output packer -maxdepth 2 -name '*.qcow2' -type f -delete 2>/dev/null || true
+  find output packer/output -maxdepth 2 -type f \( -name '*.qcow2' -o -name 'packer-win*' -o -name 'windows-server-*' \) -delete 2>/dev/null || true
   log "Artifact cleanup done."
 }
 

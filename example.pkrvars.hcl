@@ -27,7 +27,8 @@ ssh_public_keys = [
 
 # ssh_public_keys_file = "/path/to/authorized_keys"
 
-output_directory = "./output"
+# Relative to packer/ (where make build runs). Resolves to repo output/.
+output_directory = "../output"
 vm_cpus          = 4
 vm_memory        = 8192
 disk_size        = "80G"

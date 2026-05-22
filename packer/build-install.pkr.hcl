@@ -60,13 +60,9 @@ build {
 
   post-processor "shell-local" {
     inline = [
-      "OUTPUT_DIR='${var.output_directory}'",
       "TARGET='${replace(local.output_image_name, ".qcow2", "-install.qcow2")}'",
-      "FOUND=$(find \"$OUTPUT_DIR\" -maxdepth 1 -name \"*.qcow2\" -type f | head -1)",
-      "if [ -z \"$FOUND\" ]; then echo \"No qcow2 found in $OUTPUT_DIR\" >&2; exit 1; fi",
-      "mv -f \"$FOUND\" \"$OUTPUT_DIR/$TARGET\"",
-      "echo \"Install disk (pass 1): $OUTPUT_DIR/$TARGET\"",
-      "echo \"Next: make build-provision-only BASE_IMAGE=$OUTPUT_DIR/$TARGET\"",
+      "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-install\" \"$TARGET\"",
+      "echo \"Next: make build-provision-only BASE_IMAGE=${abspath(var.output_directory)}/$TARGET\"",
     ]
   }
 }
