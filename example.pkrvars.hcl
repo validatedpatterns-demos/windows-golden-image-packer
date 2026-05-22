@@ -1,7 +1,8 @@
 # Copy to build.pkrvars.hcl and set paths/passwords before building.
 # cp example.pkrvars.hcl build.pkrvars.hcl
 
-windows_version = "2022"
+# Version selection: make build uses BUILD_VERSIONS (default 2022 2025), not windows_version here.
+# windows_version is a per-run Packer variable (set by Makefile -var or manual packer -var).
 windows_edition = "Standard"
 
 # --- Windows Server 2022 ---

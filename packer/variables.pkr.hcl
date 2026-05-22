@@ -1,6 +1,6 @@
 variable "windows_version" {
   type        = string
-  description = "Windows Server version to build: 2022 or 2025."
+  description = "Windows Server version for this Packer run (one image per invocation: 2022 or 2025). make build sets this via -var for each pass; manual packer build must pass -var windows_version=... or rely on the default."
   default     = "2022"
 
   validation {

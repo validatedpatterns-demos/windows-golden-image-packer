@@ -6,7 +6,7 @@ Build **Windows Server 2022** and **2025** golden images as **qcow2** disks for 
 
 | Requirement | Implementation |
 |-------------|----------------|
-| Windows Server 2022 / 2025 | `windows_version` variable (`2022` or `2025`) |
+| Windows Server 2022 / 2025 | `make build` runs both; `windows_version` selects one per Packer run |
 | Standard Edition (default) | `windows_edition` defaults to `Standard`; Datacenter supported |
 | VirtIO drivers | Installed in phase 2 (WinRM); WinPE uses IDE disk by default |
 | QEMU guest agent | `02-install-qemu-guest-agent.ps1` from virtio-win ISO |
@@ -48,32 +48,28 @@ make download-virtio
    ```bash
    make init
    make validate      # uses packer/ci.pkrvars.hcl by default
-   make build-2022    # or: make build-2025
+   make build         # Windows Server 2022, then 2025 (sequential)
    ```
 
-   `make validate` works without editing var files. Build targets default to `build.pkrvars.hcl`
-   (`VAR_FILE`); set real ISO paths there before `make build` or `make build-2022`.
+   Set **both** `windows_iso_path_2022` and `windows_iso_path_2025` in `build.pkrvars.hcl` before `make build`.
+   One version only: `make build-2022`, `make build-2025`, or `make build BUILD_VERSIONS=2022`.
 
-   Manual build from `packer/` (flags go **after** `build`):
+   `make validate` works without editing var files. Build targets use `build.pkrvars.hcl` (`VAR_FILE`).
 
-   ```bash
-   cd packer && packer init .
-   packer build -force -var-file=../build.pkrvars.hcl -only=windows-golden-image.qemu.windows .
-   ```
-
-3. Output image:
+3. Output images (under `output/` or `packer/output/` depending on `output_directory`):
 
    ```text
-   output/windows-server-2022-standard.qcow2
+   windows-server-2022-standard.qcow2
+   windows-server-2025-standard.qcow2
+   ```
 
-4. **Optional:** push to Quay as a KubeVirt container disk — [docs/quay-publish.md](docs/quay-publish.md):
+4. **Optional:** push to Quay — [docs/quay-publish.md](docs/quay-publish.md):
 
    ```bash
-   cp example.quay.env quay.env   # set QUAY_IMAGE_2022 / QUAY_IMAGE_2025
+   cp example.quay.env quay.env   # set QUAY_IMAGE_2022 and QUAY_IMAGE_2025
    podman login quay.io
-   make push-quay
-   # or: PUSH_QUAY=1 make build
-   ```
+   make push-quay                 # pushes every golden qcow2 found
+   make build-push                # build both, then push all found
    ```
 
 See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for importing the disk and VM settings.
@@ -84,10 +80,11 @@ Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `windows_version` | `2022` | `2022` or `2025` |
+| `BUILD_VERSIONS` (Makefile) | `2022 2025` | Which releases `make build` runs, in order |
+| `windows_version` (Packer) | `2022` | **One** release per `packer build` (ISO, virtio tree, output name). Set by `make build-version` / `-var`; not a list in `build.pkrvars.hcl` |
 | `windows_edition` | `Standard` | `Standard` or `Datacenter` |
-| `windows_iso_path_2022` | `""` | 2022 install ISO (required when `windows_version = "2022"`) |
-| `windows_iso_path_2025` | `""` | 2025 install ISO (required when `windows_version = "2025"`) |
+| `windows_iso_path_2022` | `""` | 2022 install ISO (required for 2022 builds) |
+| `windows_iso_path_2025` | `""` | 2025 install ISO (required for 2025 builds) |
 | `virtio_win_iso_path` | (required) | virtio-win ISO |
 | `admin_password` | (required) | Administrator password (sensitive) |
 | `product_key_2022` | `""` | Optional key when `windows_version = "2022"` |

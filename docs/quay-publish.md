@@ -30,6 +30,8 @@ QUAY_IMAGE_REFS="quay.io/myorg/windows-2022:golden quay.io/myorg/windows-2022:re
 
 ## Push after build
 
+`make push-quay` pushes **every** `windows-server-*.qcow2` found under `output/` and `packer/output/` (for example both 2022 and 2025 after `make build`).
+
 ```bash
 make build
 make push-quay
@@ -38,7 +40,14 @@ make push-quay
 Or build and push in one step:
 
 ```bash
-PUSH_QUAY=1 make build
+make build-push
+# equivalent: PUSH_QUAY=1 make build
+```
+
+Push one file only:
+
+```bash
+make push-quay GOLDEN_QCOW2=packer/output/windows-server-2022-standard.qcow2
 ```
 
 Push a specific qcow2 and override refs on the command line:
