@@ -1,13 +1,16 @@
-# Configure OpenSSH Server (install via SYSTEM task if needed; WinRM/DISM alone get access denied).
+# Configure OpenSSH Server (install via SYSTEM task if needed; then sshd_config + service).
 $ErrorActionPreference = 'Stop'
+
+# File provisioner flattens scripts/ into C:\Windows\Temp\ (no subfolder).
+$commonPath = 'C:\Windows\Temp\OpenSSH-Server-Common.ps1'
+if (-not (Test-Path $commonPath)) {
+    $commonPath = Join-Path $PSScriptRoot 'OpenSSH-Server-Common.ps1'
+}
+. $commonPath
 
 function Write-Step {
     param([string]$Message)
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
-}
-
-function Get-OpenSshCapability {
-    Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' }
 }
 
 function Install-OpenSshServerAsSystem {
@@ -17,7 +20,7 @@ function Install-OpenSshServerAsSystem {
     )
 
     if (-not (Test-Path $ScriptPath)) {
-        throw "Install script not found at $ScriptPath (file provisioner should upload scripts/)."
+        throw "Install script not found at $ScriptPath."
     }
 
     $taskName = 'PackerInstallOpenSSH'
@@ -36,8 +39,7 @@ function Install-OpenSshServerAsSystem {
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 15
-        $cap = Get-OpenSshCapability
-        if ($cap -and $cap.State -eq 'Installed') {
+        if (Test-OpenSshServerReady) {
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
             return
         }
@@ -49,21 +51,18 @@ function Install-OpenSshServerAsSystem {
     $info = Get-ScheduledTaskInfo -TaskName $taskName
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
 
-    $cap = Get-OpenSshCapability
-    if ($cap -and $cap.State -eq 'Installed') {
+    if (Test-OpenSshServerReady) {
         return
     }
 
     $logHint = ''
     if (Test-Path 'C:\Windows\Temp\openssh-install.log') {
-        $logHint = " Last lines of C:\Windows\Temp\openssh-install.log:`n$(
-            (Get-Content 'C:\Windows\Temp\openssh-install.log' -Tail 15) -join "`n"
-        )"
+        $logHint = " Log tail:`n$((Get-Content 'C:\Windows\Temp\openssh-install.log' -Tail 15) -join "`n")"
     }
 
     throw @(
-        "OpenSSH install task did not complete (task result $($info.LastTaskResult), capability state $($cap.State))."
-        'Ensure the VM has network for Windows Update during build.'
+        "OpenSSH install task failed (LastTaskResult $($info.LastTaskResult), capability $((Get-OpenSshCapability).State))."
+        'VM needs network for Windows Update. Check C:\Windows\Temp\openssh-install.log.'
         $logHint
     ) -join ' '
 }
@@ -77,23 +76,29 @@ if (-not $capability) {
 
 Write-Step "OpenSSH.Server state: $($capability.State) ($($capability.Name))"
 
-if ($capability.State -ne 'Installed') {
-    Write-Step 'Installing OpenSSH as SYSTEM (WinRM/DISM exit 5 = access denied; scheduled task, often 5-15 minutes)...'
-    Install-OpenSshServerAsSystem
+if (-not (Test-OpenSshServerReady)) {
+    if ($capability.State -ne 'Installed') {
+        Write-Step 'Installing OpenSSH as SYSTEM (scheduled task; often 5-15 minutes)...'
+        Install-OpenSshServerAsSystem
+    } else {
+        Write-Step 'Capability is Installed but sshd_config missing; repairing layout as SYSTEM...'
+        Install-OpenSshServerAsSystem
+    }
     $capability = Get-OpenSshCapability
-    Write-Step "OpenSSH.Server state after install: $($capability.State)"
+    Write-Step "After install: capability=$($capability.State), ready=$(Test-OpenSshServerReady)"
 }
 
-if ($capability.State -ne 'Installed') {
-    throw 'OpenSSH.Server is still not installed after SYSTEM install task.'
+if (-not (Test-OpenSshServerReady)) {
+    Write-Step 'Attempting layout initialization from WinRM session...'
+    Initialize-OpenSshServerLayout -Log { param($m) Write-Step $m }
 }
-
-Write-Step 'Updating sshd_config...'
 
 $sshdConfig = 'C:\ProgramData\ssh\sshd_config'
 if (-not (Test-Path $sshdConfig)) {
-    throw "sshd_config not found at $sshdConfig."
+    throw "sshd_config still missing at $sshdConfig. See C:\Windows\Temp\openssh-install.log and C:\Windows\Logs\DISM\dism.log."
 }
+
+Write-Step 'Updating sshd_config...'
 
 $config = Get-Content $sshdConfig
 $replacements = @{

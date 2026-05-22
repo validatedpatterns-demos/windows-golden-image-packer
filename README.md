@@ -164,6 +164,8 @@ example.pkrvars.hcl
 
 - **`Add-WindowsCapability` / OpenSSH / DISM exit 5**: WinRM cannot install capabilities (access denied). OpenSSH is installed as **SYSTEM** during specialize (`A:\install-openssh-server.ps1`) and, if needed, via a **scheduled task** in `03-configure-openssh.ps1` (not DISM over WinRM). Run `make clean` so the floppy and autounattend are regenerated. The guest needs **network** during install/provision so Windows Update can supply the OpenSSH capability. On failure, check `C:\Windows\Temp\openssh-install.log` in the VM.
 
+- **`sshd_config not found`**: `Get-WindowsCapability` can show **Installed** before `C:\ProgramData\ssh\sshd_config` exists. Scripts now run `install-sshd.ps1`, copy `sshd_config_default`, or start `sshd` once to create the file. Run `make clean` and rebuild so the updated floppy/scripts are used.
+
 - **OpenSSH step appears stuck for several minutes**: Packer often prints little until a PowerShell script finishes. On `03-configure-openssh.ps1`, **`Get-WindowsCapability` can take 1-3 minutes**; the **SYSTEM install task** often takes **5-15 minutes** with sparse output. That is usually normal. If OpenSSH was already installed in specialize, script 03 finishes in under a minute.
 
 - **WinRM timeout** (Server Manager desktop, no disk activity): install finished; WinRM was not enabled. On the VM run `enable-winrm.ps1` from the PROVISION CD or open PowerShell as Administrator and run `winrm quickconfig -q -force` plus firewall rules (see `http/enable-winrm.ps1`). Rebuilds include **first-logon** WinRM setup as a fallback. Check Packer is forwarding port 5985: `pgrep -af hostfwd.*5985`.

@@ -96,7 +96,8 @@ locals {
     "enable-winrm.ps1"            = local.enable_winrm_ps1
     "enable-winrm.cmd"            = local.enable_winrm_cmd
     "enable-winrm-locator.cmd"    = local.enable_winrm_locator
-    "install-openssh-server.ps1"  = file("${path.root}/../scripts/install-openssh-server.ps1")
+    "install-openssh-server.ps1"   = file("${path.root}/../scripts/install-openssh-server.ps1")
+    "OpenSSH-Server-Common.ps1"    = file("${path.root}/../scripts/OpenSSH-Server-Common.ps1")
     "install-openssh-locator.cmd" = file("${path.root}/../http/install-openssh-locator.cmd")
   }
 
