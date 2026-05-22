@@ -28,7 +28,7 @@ help:
 	@echo "  validate        Validate Packer templates"
 	@echo "  build                  Build $(BUILD_VERSIONS) sequentially (install + provision + sysprep)"
 	@echo "  build-version          Build one version: make build-version VERSION=2025"
-	@echo "  build-install          Pass 1 only: Windows install to *-install.qcow2"
+	@echo "  build-install          Pass 1 only: make build-install VERSION=2025"
 	@echo "  build-provision-only   Pass 2 only: BASE_IMAGE=path/to-install.qcow2"
 	@echo "  build-2022             Build Windows Server 2022 only"
 	@echo "  build-2025             Build Windows Server 2025 only"
@@ -70,9 +70,12 @@ build-version:
 		$(PACKER_ONLY_GOLDEN) .
 
 build-install: stage-virtio init
+	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
 	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true
-	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) $(PACKER_ONLY_INSTALL) .
+	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
+		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
+		$(PACKER_ONLY_INSTALL) .
 
 build-provision-only: stage-virtio init
 	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=output/...-install.qcow2 from make build-install" >&2; exit 1)

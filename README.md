@@ -167,6 +167,7 @@ example.pkrvars.hcl
 
 - **Install cannot see disk**: VirtIO SCSI needs `vioscsi` + `viostor` on the PROVISION CD; re-run `make stage-virtio` and confirm `drivers/vioscsi/2k22/amd64/vioscsi.sys` exists.
 
+- **Stops on "Select location to install" but shows the ~80GB disk**: Setup sees the QEMU disk; unattended partitioning did not finish. On SeaBIOS (`efi_boot = false`) the answer file must use the MBR layout (System Reserved + Windows). Run `make clean` and rebuild so the floppy is regenerated. Short-term: click the unallocated/drive entry and **Next** to continue. If it still prompts every build, check `X:\Windows\Panther\setuperr.log` on the VM (Shift+F10 during setup).
 - **`DiskConfiguration` / `ImageInstall` errors**: use defaults `install_disk_interface = "ide"` and `install_net_device = "e1000"` (see [docs/install-phases.md](docs/install-phases.md)). Run `make clean` before rebuilding. Optional split: `make build-install` then `make build-provision-only BASE_IMAGE=...`.
 - **VirtIO driver media not found**: run `STAGE_FORCE=1 make stage-virtio` (slim tree ~27MB, not ~500MB). Provisioners read `C:\Windows\Temp\drivers\` (WinRM upload) and fall back to the PROVISION CD (`viostor\2k22\amd64` at CD root or under `drivers\`). On failure the script lists top-level entries on each path it checked.
 
@@ -182,7 +183,8 @@ example.pkrvars.hcl
 
 - **WinRM timeout (general)**: ensure the build host can reach the VM on port 5985; try `headless = false` to watch setup.
 - **Wrong edition**: confirm `/IMAGE/NAME` in the ISO matches `locals.edition_image_names` in `packer/locals.pkr.hcl`.
-- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version`. Omit both to install without a key (evaluation/grace, or activate later via KMS).
+- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version` (`make build-2025` passes `-var windows_version=2025`). There is no generic `product_key` variable. Omit both to install without a key (evaluation/grace, or activate later via KMS). `packer console` shows `<sensitive>` for keys in logs only; the floppy/CD still contains the real key. Verify: `VERSION=2025 UEFI=0 bash scripts/render-autounattend.sh | grep -A2 ProductKey`.
+- **2025 key rejected during setup**: the key must match the edition (`windows_edition` Standard vs Datacenter) and your licensing channel (MAK from VLSC vs KMS GVLK). For KMS clients use the Microsoft GVLK for the edition (for example Server 2025 Standard: `TVRH6-WHNXV-R9WG3-9XRFY-MY832`) and activate against your KMS host after deploy. A 2022 MAK/GVLK will not work on 2025 media. Split install (`make build-install`) requires `VERSION=2025` or it defaults to 2022 and uses `product_key_2022`.
 - **OVMF not found**: set `ovmf_code_path` / `ovmf_vars_path` for your distribution.
 
 ## License

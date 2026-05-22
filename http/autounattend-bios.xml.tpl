@@ -16,6 +16,7 @@ ${virtio_driver_paths_xml}
       <SetupUILanguage>
         <UILanguage>en-US</UILanguage>
       </SetupUILanguage>
+      <UILanguageFallback>en-US</UILanguageFallback>
       <InputLocale>en-US</InputLocale>
       <SystemLocale>en-US</SystemLocale>
       <UILanguage>en-US</UILanguage>
@@ -24,12 +25,18 @@ ${virtio_driver_paths_xml}
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DiskConfiguration>
+        <WillShowUI>Never</WillShowUI>
         <Disk wcm:action="add">
           <DiskID>0</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
           <CreatePartitions>
             <CreatePartition wcm:action="add">
               <Order>1</Order>
+              <Type>Primary</Type>
+              <Size>350</Size>
+            </CreatePartition>
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
               <Type>Primary</Type>
               <Extend>true</Extend>
             </CreatePartition>
@@ -38,6 +45,13 @@ ${virtio_driver_paths_xml}
             <ModifyPartition wcm:action="add">
               <Order>1</Order>
               <PartitionID>1</PartitionID>
+              <Format>NTFS</Format>
+              <Label>System Reserved</Label>
+              <Active>true</Active>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
               <Format>NTFS</Format>
               <Label>Windows</Label>
               <Letter>C</Letter>
@@ -55,8 +69,10 @@ ${virtio_driver_paths_xml}
           </InstallFrom>
           <InstallTo>
             <DiskID>0</DiskID>
-            <PartitionID>1</PartitionID>
+            <PartitionID>2</PartitionID>
           </InstallTo>
+          <InstallToAvailablePartition>false</InstallToAvailablePartition>
+          <WillShowUI>Never</WillShowUI>
         </OSImage>
       </ImageInstall>
       <UserData>
