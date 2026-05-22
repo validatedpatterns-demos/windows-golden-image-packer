@@ -16,8 +16,14 @@ Environment (optional overrides):
   QUAY_IMAGE_2025     Image ref for Windows Server 2025 builds
   QUAY_IMAGE_REFS     Space-separated list of refs (pushes the same disk to each)
   CONTAINER_TOOL      podman or docker (default: podman, then docker)
+  TMPDIR              Temp dir for small files (Containerfile); mktemp respects this
+  QUAY_PUSH_WORK_DIR  Unused (kept for compatibility); build context is the qcow2 directory
 
 Prerequisites: podman|docker login quay.io (or your registry host)
+
+Disk space: the qcow2 is not copied into /tmp. Podman may still use TMPDIR and
+/var/lib/containers during layer commit (often needs ~1x image size free somewhere).
+Set TMPDIR to a directory on a large filesystem before push if /tmp is small.
 EOF
 }
 
@@ -119,35 +125,38 @@ registry_from_ref() {
 build_container_disk() {
   local tool="$1"
   local qcow2_path="$2"
-  local workdir="$3"
-  local abs_qcow2
+  local image_tag="$3"
+  local abs_qcow2 qcow2_dir qcow2_name containerfile
   abs_qcow2="$(cd "$(dirname "$qcow2_path")" && pwd)/$(basename "$qcow2_path")"
+  qcow2_dir="$(dirname "$abs_qcow2")"
+  qcow2_name="$(basename "$abs_qcow2")"
 
-  cp -f "$abs_qcow2" "$workdir/disk.qcow2"
-  cat >"$workdir/Containerfile" <<'EOF'
+  # Build from the qcow2 directory so we do not copy the full image into /tmp.
+  containerfile="$(mktemp)"
+  trap 'rm -f "$containerfile"' RETURN
+  cat >"$containerfile" <<EOF
 # KubeVirt / OpenShift Virtualization container disk (qemu uid 107).
 FROM scratch
 LABEL org.opencontainers.image.title="Windows golden image (container disk)"
-COPY --chown=107:107 disk.qcow2 /disk/disk.qcow2
+COPY --chown=107:107 ${qcow2_name} /disk/disk.qcow2
 EOF
 
   log "Building container disk image ($("$tool" --version | head -1))..."
-  "$tool" build --format docker -t "$4" "$workdir"
+  log "Build context: $qcow2_dir (qcow2 not staged under /tmp)"
+  "$tool" build --format docker -f "$containerfile" -t "$image_tag" "$qcow2_dir"
 }
 
 push_ref() {
   local tool="$1"
   local qcow2_path="$2"
   local image_ref="$3"
-  local registry workdir tmp_tag
+  local registry tmp_tag
 
   registry="$(registry_from_ref "$image_ref")"
   verify_registry_login "$tool" "$registry"
 
-  workdir="$(mktemp -d)"
-  trap 'rm -rf "$workdir"' RETURN
   tmp_tag="packer-golden-disk:build-$$"
-  build_container_disk "$tool" "$qcow2_path" "$workdir" "$tmp_tag"
+  build_container_disk "$tool" "$qcow2_path" "$tmp_tag"
 
   log "Tagging and pushing $image_ref"
   "$tool" tag "$tmp_tag" "$image_ref"

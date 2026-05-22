@@ -88,3 +88,12 @@ For DataVolume-based import from qcow2 on disk instead of registry, see [openshi
 - **Not logged in**: run `podman login quay.io` (or the host from your image ref).
 - **No image ref**: set `QUAY_IMAGE_2022` / `QUAY_IMAGE_2025` in `quay.env` or pass refs as script arguments.
 - **Large push**: the full qcow2 is in one layer; upload time depends on disk size and network.
+- **`/tmp` full during push**: `push-qcow2-to-quay.sh` builds from the qcow2 directory (no full copy into `/tmp`). Podman may still use `TMPDIR` and storage under `/var/lib/containers` while committing layers. Point both at space on your large disk:
+
+  ```bash
+  mkdir -p "$HOME/build-tmp" "$HOME/containers-tmp"
+  export TMPDIR="$HOME/build-tmp"
+  make push-quay
+  ```
+
+  Optional: move Podman storage off a small root filesystem (`podman info` → `graphRoot`; see [Podman storage docs](https://docs.podman.io/en/latest/markdown/podman.1.html#storage-conf)).

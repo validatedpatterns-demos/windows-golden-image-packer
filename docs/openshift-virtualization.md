@@ -29,6 +29,14 @@ spec:
 
 Use `virtctl image-upload` or your cluster's documented import path to load `windows-server-2022-standard.qcow2`.
 
+`virtctl` streams from `--image-path`; it does not offer a separate staging directory. Keep the qcow2 on a filesystem with enough free space (for example `./output/` in this repo), not under `/tmp`:
+
+```bash
+virtctl image-upload dv windows-server-2025-standard \
+  --size=80Gi \
+  --image-path=/home/you/gitwork/windows-golden-image-packer/output/windows-server-2025-standard.qcow2
+```
+
 To publish the same disk to **Quay** as a container image (optional), see [quay-publish.md](quay-publish.md).
 
 ## VirtualMachine hints
