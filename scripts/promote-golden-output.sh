@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Move finalized golden qcow2 from a per-version Packer staging dir to output/.
 # Packer removes output_directory on each build; staging avoids deleting other versions.

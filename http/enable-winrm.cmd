@@ -1,3 +1,6 @@
+@REM Copyright 2026 Red Hat, Inc.
+@REM SPDX-License-Identifier: Apache-2.0
+
 @echo off
 REM Run from autounattend specialize pass (floppy A:\ or PROVISION CD).
 winrm quickconfig -q -force

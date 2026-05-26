@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Ensure the built-in Administrator account is enabled with the Packer-supplied password.
 $ErrorActionPreference = 'Stop'
 

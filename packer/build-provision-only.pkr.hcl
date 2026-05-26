@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Optional pass 2: boot an existing qcow2 (after a failed or partial build) and run provisioners + sysprep only.
 # Usage:
 #   make build-install          # stops before sysprep; writes output/*-install.qcow2

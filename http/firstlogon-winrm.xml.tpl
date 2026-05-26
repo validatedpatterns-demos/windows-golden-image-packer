@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 Red Hat, Inc.
+  SPDX-License-Identifier: Apache-2.0
+-->
+
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <Description>Enable WinRM for Packer (first logon fallback)</Description>

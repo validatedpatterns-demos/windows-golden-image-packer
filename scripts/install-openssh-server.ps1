@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Install OpenSSH.Server capability (must run as SYSTEM; used by specialize and scheduled task).
 $ErrorActionPreference = 'Stop'
 

@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Tear down a failed or interrupted Packer QEMU build (processes + artifacts).
 set -euo pipefail

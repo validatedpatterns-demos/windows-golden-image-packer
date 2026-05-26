@@ -1,3 +1,6 @@
+@REM Copyright 2026 Red Hat, Inc.
+@REM SPDX-License-Identifier: Apache-2.0
+
 @echo off
 if exist A:\enable-winrm.ps1 powershell.exe -ExecutionPolicy Bypass -File A:\enable-winrm.ps1 && exit /b 0
 if exist A:\enable-winrm.cmd call A:\enable-winrm.cmd && exit /b 0

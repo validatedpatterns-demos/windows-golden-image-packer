@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 Red Hat, Inc.
+  SPDX-License-Identifier: Apache-2.0
+-->
+
     <component name="Microsoft-Windows-PnpCustomizationNonWinPE" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DriverPaths>

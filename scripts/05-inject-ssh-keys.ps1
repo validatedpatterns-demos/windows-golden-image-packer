@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Authorize SSH public keys for the Administrator account (administrators_authorized_keys).
 $ErrorActionPreference = 'Stop'
 

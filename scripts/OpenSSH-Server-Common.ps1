@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Shared OpenSSH Server install/layout helpers (dot-sourced by install + configure scripts).
 
 function Get-OpenSshCapability {

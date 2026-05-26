@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Install QEMU Guest Agent (required for OpenShift Virtualization / KubeVirt guest management).
 $ErrorActionPreference = 'Stop'
 

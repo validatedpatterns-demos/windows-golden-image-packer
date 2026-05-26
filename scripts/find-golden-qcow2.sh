@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Find built golden qcow2 images under output/ or packer/output/.
 # Usage: find-golden-qcow2.sh          # print one image (newest), exit 1 if none

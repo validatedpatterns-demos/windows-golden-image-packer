@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Pass 1 only: unattended Windows install, then shut down (no VirtIO provisioners, no sysprep).
 # Use with: make build-install
 # Then:     make build-provision-only BASE_IMAGE=output/windows-server-2022-standard-install.qcow2

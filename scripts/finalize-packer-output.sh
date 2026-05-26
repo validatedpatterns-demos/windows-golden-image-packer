@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Locate Packer QEMU output and rename to the golden-image filename.
 # QEMU writes output_directory/vm_name with no .qcow2 extension unless vm_name includes it.

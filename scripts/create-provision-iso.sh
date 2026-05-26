@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Build PROVISION.iso (autounattend.xml + staged VirtIO drivers) for virt-install / manual UEFI installs.
 set -euo pipefail

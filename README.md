@@ -239,4 +239,10 @@ example.pkrvars.hcl
 
 ## License
 
-Provide your own Windows Server licenses for installation media and deployed VMs.
+Packer templates (`packer/`), shell scripts (`scripts/`), and unattended-install assets (`http/`) are licensed under the [Apache License, Version 2.0](LICENSE).
+
+Third-party components are **not** covered by that license, including:
+
+- Microsoft Windows Server installation media and deployed Windows instances (your own licenses)
+- [virtio-win](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/) drivers staged from the virtio-win ISO
+- Tools installed inside the guest image (QEMU guest agent, OpenSSH, and similar) under their respective licenses

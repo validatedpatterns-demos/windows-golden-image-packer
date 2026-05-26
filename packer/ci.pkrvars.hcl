@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Stub paths for `make validate` only (no real ISO required).
 windows_iso_path_2022 = "./ci-stub.iso"
 windows_iso_path_2025 = "./ci-stub.iso"

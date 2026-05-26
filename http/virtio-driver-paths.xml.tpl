@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 Red Hat, Inc.
+  SPDX-License-Identifier: Apache-2.0
+-->
+
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
           <Path>D:\viostor\${virtio_os_dir}\amd64</Path>
         </PathAndCredentials>

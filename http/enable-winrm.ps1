@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Enable WinRM for Packer (specialize pass or first logon).
 $ErrorActionPreference = 'Stop'
 

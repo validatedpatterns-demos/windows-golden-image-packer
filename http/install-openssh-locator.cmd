@@ -1,3 +1,6 @@
+@REM Copyright 2026 Red Hat, Inc.
+@REM SPDX-License-Identifier: Apache-2.0
+
 @echo off
 if exist A:\install-openssh-server.ps1 (
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File A:\install-openssh-server.ps1

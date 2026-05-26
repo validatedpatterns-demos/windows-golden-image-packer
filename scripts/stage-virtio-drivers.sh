@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Extract VirtIO drivers from virtio-win.iso into drivers/ (WinPE + provision CD; keep 2k22/2k25 amd64 only).
 set -euo pipefail

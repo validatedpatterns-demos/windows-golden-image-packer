@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Install VirtIO storage, network, balloon, and SCSI drivers from WinRM-staged or PROVISION CD media.
 # Marks block/SCSI drivers boot-start so the image can boot with disk.bus virtio on OpenShift/KubeVirt.
 $ErrorActionPreference = 'Stop'

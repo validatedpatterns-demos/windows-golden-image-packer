@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Render autounattend.xml from Packer HCL (uses same templates/vars as packer build).
 set -euo pipefail

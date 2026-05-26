@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Re-encode a golden qcow2 with sparse allocation and optional cluster compression.
 # Usage: optimize-qcow2.sh [--all] [path.qcow2 ...]

@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Copy to build.pkrvars.hcl and set paths/passwords before building.
 # cp example.pkrvars.hcl build.pkrvars.hcl
 

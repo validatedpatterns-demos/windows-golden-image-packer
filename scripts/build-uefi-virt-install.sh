@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Unattended UEFI Windows install via virt-install (SATA CD-ROMs). For OpenShift-ready base disks.
 set -euo pipefail

@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Report qcow2 virtual size (DataVolume minimum) and on-disk file size.
 # Usage: qcow2-size-report.sh [path.qcow2 ...]

@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Create stub ISO/qcow2 paths and a minimal drivers/ tree for `packer validate` / CI.
 set -euo pipefail

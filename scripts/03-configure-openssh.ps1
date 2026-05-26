@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Configure OpenSSH Server (install via SYSTEM task if needed; then sshd_config + service).
 $ErrorActionPreference = 'Stop'
 

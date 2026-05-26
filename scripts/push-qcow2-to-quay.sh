@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env bash
 # Package a qcow2 as a KubeVirt container disk and push to one or more Quay image references.
 set -euo pipefail

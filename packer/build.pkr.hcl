@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Phase 1: unattended Windows Setup (IDE disk + e1000 — no VirtIO required in WinPE).
 # Phase 2: WinRM provisioners install VirtIO, QEMU-GA, OpenSSH, then sysprep.
 

@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 # Free disk space and zero unused clusters before sysprep so the qcow2 can sparsify on the build host.
 # Do not wipe all of C:\Windows\Temp — Packer uploads scripts there (sysprep.ps1, packer-ps-env-vars-*.ps1).
 $ErrorActionPreference = 'Stop'

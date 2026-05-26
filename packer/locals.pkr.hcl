@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 locals {
   edition_image_names = {
     "2022-Standard"    = "Windows Server 2022 SERVERSTANDARD"

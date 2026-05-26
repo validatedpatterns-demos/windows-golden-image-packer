@@ -1,3 +1,6 @@
+# Copyright 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 variable "windows_version" {
   type        = string
   description = "Windows Server version for this Packer run (one image per invocation: 2022 or 2025). make build sets this via -var for each pass; manual packer build must pass -var windows_version=... or rely on the default."
