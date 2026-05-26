@@ -20,6 +20,10 @@ PACKER_ONLY_GOLDEN     := -only=windows-golden-image.qemu.windows
 PACKER_ONLY_INSTALL    := -only=windows-install-only.qemu.install
 PACKER_ONLY_PROVISION  := -only=windows-golden-provision-only.qemu.from_install
 
+# Packer deletes output_directory at the start of each build. Per-version staging
+# prevents "make build" (2022 then 2025) from removing the previous qcow2.
+PACKER_STAGING         = .packer-$(VERSION)
+
 .PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size clean clean-force
 
 help:
@@ -50,7 +54,11 @@ validate: init
 build: stage-virtio init
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
 	@if [ -d drivers/viostor/2k12 ]; then echo "drivers/ is bloated (old full virtio-win tree). Run: STAGE_FORCE=1 make stage-virtio" >&2; exit 1; fi
-	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true
+	@set -e; for v in $(BUILD_VERSIONS); do \
+	  rm -rf "output/.packer-$$v" "packer/output/.packer-$$v"; \
+	  rm -f "output/windows-server-$$v-"*.qcow2 "packer/output/windows-server-$$v-"*.qcow2; \
+	done
+	rm -rf packer/packer_cache 2>/dev/null || true
 	$(MAKE) build-versions
 	@if [ "$(PUSH_QUAY)" = "1" ]; then $(MAKE) push-quay; fi
 
@@ -65,11 +73,14 @@ build-versions:
 build-version:
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025" >&2; exit 1)
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
+	rm -rf "output/$(PACKER_STAGING)" "packer/output/$(PACKER_STAGING)" 2>/dev/null || true
 	rm -f output/windows-server-$(VERSION)-*.qcow2 packer/output/windows-server-$(VERSION)-*.qcow2 \
 		packer/output/packer-win$(VERSION)-* 2>/dev/null || true
 	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
+		-var output_directory=../output/$(PACKER_STAGING) \
 		$(PACKER_ONLY_GOLDEN) .
+	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
 build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)

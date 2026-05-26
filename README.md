@@ -6,7 +6,7 @@ Build **Windows Server 2022** and **2025** golden images as **qcow2** disks for 
 
 | Requirement | Implementation |
 |-------------|----------------|
-| Windows Server 2022 / 2025 | `make build` runs both; `windows_version` selects one per Packer run |
+| Windows Server 2022 / 2025 | `make build` runs both sequentially; each version uses staging dir `.packer-<version>` then promotes to `output/` |
 | Standard Edition (default) | `windows_edition` defaults to `Standard`; Datacenter supported |
 | VirtIO drivers | Installed in phase 2 (WinRM); WinPE uses IDE disk by default |
 | QEMU guest agent | `02-install-qemu-guest-agent.ps1` from virtio-win ISO |
@@ -187,6 +187,8 @@ example.pkrvars.hcl
 - Verify Windows ISO image index names if install fails at edition selection (`dism /Get-WimInfo` on the ISO).
 
 ## Troubleshooting
+
+- **`make build` left only the last Windows version in `output/`**: Packer removes `output_directory` at the start of each build. Current Makefile uses per-version staging (`.packer-2022`, `.packer-2025`) and `scripts/promote-golden-output.sh` so both qcow2 files remain in `output/` for `make push-quay`.
 
 - **`push-quay`: No golden qcow2 under output/**: the disk may be under `packer/output/` when `output_directory = "./output"` in `build.pkrvars.hcl`. `make push-quay` searches both `output/` and `packer/output/`. Prefer `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
