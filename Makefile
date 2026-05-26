@@ -49,7 +49,8 @@ init:
 	cd $(PACKER_DIR) && packer init .
 
 validate: init
-	cd $(PACKER_DIR) && rm -rf ci-output && touch ci-stub.iso && packer validate -var-file=$(VALIDATE_VAR_FILE) -except=windows-golden-provision-only.qemu.from_install .
+	./scripts/prepare-ci-validate.sh
+	cd $(PACKER_DIR) && packer validate -var-file=$(VALIDATE_VAR_FILE) .
 
 build: stage-virtio init
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)

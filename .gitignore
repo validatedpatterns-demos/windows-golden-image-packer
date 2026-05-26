@@ -5,6 +5,7 @@ output/
 packer/packer_cache/
 packer/ci-output/
 packer/ci-stub.iso
+packer/ci-stub.qcow2
 packer_cache/
 packer-manifest.json
 

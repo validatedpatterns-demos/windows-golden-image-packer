@@ -20,10 +20,8 @@ jobs:
         with:
           version: "1.11.2"
 
-      - name: Create CI stub ISO paths
-        run: |
-          rm -rf ci-output
-          touch ci-stub.iso
+      - name: Prepare CI validate stubs
+        run: bash ../scripts/prepare-ci-validate.sh
 
       - name: Packer init
         run: packer init .
