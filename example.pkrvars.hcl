@@ -32,7 +32,8 @@ ssh_public_keys = [
 output_directory = "../output"
 vm_cpus          = 4
 vm_memory        = 8192
-disk_size        = "80G"
+# Virtual disk size; match or exceed this in DataVolume/PVC (e.g. 60G -> storage: 60Gi).
+disk_size        = "60G"
 headless         = true
 
 # Leave false on Fedora/QEMU 10 — SeaBIOS boots the Windows ISO reliably. See docs/uefi-install.md.

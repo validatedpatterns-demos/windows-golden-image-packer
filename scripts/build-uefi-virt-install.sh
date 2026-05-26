@@ -29,7 +29,7 @@ fi
 : "${WINDOWS_ISO:?Set ${ISO_VAR} in $VAR_FILE for windows_version=${WINDOWS_VERSION}}"
 : "${VM_MEMORY:=8192}"
 : "${VM_CPUS:=4}"
-: "${DISK_SIZE:=80}"
+: "${DISK_SIZE:=60G}"
 : "${OUTPUT_DIR:=$ROOT/output}"
 
 DISK_PATH="$OUTPUT_DIR/uefi-install-base.qcow2"

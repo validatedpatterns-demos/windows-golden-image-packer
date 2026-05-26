@@ -92,7 +92,7 @@ Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO 
 | `ssh_public_keys` | `[]` | List of OpenSSH public keys |
 | `ssh_public_keys_file` | `""` | File with one key per line |
 | `output_directory` | `../output` | qcow2 output directory |
-| `disk_size` | `80G` | Root disk size |
+| `disk_size` | `60G` | Root disk virtual size; set DataVolume/PVC to at least this (e.g. `60Gi`) |
 | `install_disk_interface` | `ide` | Disk bus during Setup (`ide` recommended) |
 | `install_net_device` | `e1000` | NIC during install/WinRM (`e1000` until VirtIO net is installed) |
 | `efi_boot` | `false` | Packer install firmware; keep `false` on QEMU 10 |
@@ -167,7 +167,7 @@ example.pkrvars.hcl
 
 - **Install cannot see disk**: VirtIO SCSI needs `vioscsi` + `viostor` on the PROVISION CD; re-run `make stage-virtio` and confirm `drivers/vioscsi/2k22/amd64/vioscsi.sys` exists.
 
-- **Stops on "Select location to install" but shows the ~80GB disk**: Setup sees the QEMU disk; unattended partitioning did not finish. On SeaBIOS (`efi_boot = false`) the answer file must use the MBR layout (System Reserved + Windows). Run `make clean` and rebuild so the floppy is regenerated. Short-term: click the unallocated/drive entry and **Next** to continue. If it still prompts every build, check `X:\Windows\Panther\setuperr.log` on the VM (Shift+F10 during setup).
+- **Stops on "Select location to install" but shows the expected install disk size**: Setup sees the QEMU disk; unattended partitioning did not finish. On SeaBIOS (`efi_boot = false`) the answer file must use the MBR layout (System Reserved + Windows). Run `make clean` and rebuild so the floppy is regenerated. Short-term: click the unallocated/drive entry and **Next** to continue. If it still prompts every build, check `X:\Windows\Panther\setuperr.log` on the VM (Shift+F10 during setup).
 - **`DiskConfiguration` / `ImageInstall` errors**: use defaults `install_disk_interface = "ide"` and `install_net_device = "e1000"` (see [docs/install-phases.md](docs/install-phases.md)). Run `make clean` before rebuilding. Optional split: `make build-install` then `make build-provision-only BASE_IMAGE=...`.
 - **VirtIO driver media not found**: run `STAGE_FORCE=1 make stage-virtio` (slim tree ~27MB, not ~500MB). Provisioners read `C:\Windows\Temp\drivers\` (WinRM upload) and fall back to the PROVISION CD (`viostor\2k22\amd64` at CD root or under `drivers\`). On failure the script lists top-level entries on each path it checked.
 

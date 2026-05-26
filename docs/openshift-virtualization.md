@@ -6,6 +6,19 @@ The build produces a **sysprepped** **qcow2** image with VirtIO disk/network and
 
 Import the disk as a DataVolume or containerized disk, then create a `VirtualMachine` with **UEFI** and VirtIO (if your image was built with the UEFI path).
 
+## Disk and DataVolume size
+
+The qcow2 **virtual size** is set at build time by `disk_size` in `build.pkrvars.hcl` (default **60G** in `example.pkrvars.hcl`). CDI and `virtctl image-upload` require the target PVC/DataVolume to be **at least** that large.
+
+| Build setting | DataVolume / upload |
+|---------------|---------------------|
+| `disk_size = "60G"` | `storage: 60Gi`, `--size=60Gi` |
+| `disk_size = "80G"` | `storage: 80Gi`, `--size=80Gi` |
+
+Autounattend creates a small System Reserved partition and **extends** the Windows volume to use the rest of the disk, so lowering `disk_size` and **rebuilding** is the supported way to fit a smaller DataVolume. Shrinking an existing image in place is not supported by this repo.
+
+If you need more than 60G inside the guest, raise `disk_size` before `make build` and use the same value (with a `Gi` suffix) on import.
+
 ## Import qcow2
 
 Upload the image to a PVC or use CDI to clone from HTTP/registry, for example:
@@ -24,7 +37,7 @@ spec:
       - ReadWriteOnce
     resources:
       requests:
-        storage: 80Gi
+        storage: 60Gi
 ```
 
 Use `virtctl image-upload` or your cluster's documented import path to load `windows-server-2022-standard.qcow2`.
@@ -33,7 +46,7 @@ Use `virtctl image-upload` or your cluster's documented import path to load `win
 
 ```bash
 virtctl image-upload dv windows-server-2025-standard \
-  --size=80Gi \
+  --size=60Gi \
   --image-path=/home/you/gitwork/windows-golden-image-packer/output/windows-server-2025-standard.qcow2
 ```
 
