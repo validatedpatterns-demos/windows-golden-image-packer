@@ -20,7 +20,7 @@ PACKER_ONLY_GOLDEN     := -only=windows-golden-image.qemu.windows
 PACKER_ONLY_INSTALL    := -only=windows-install-only.qemu.install
 PACKER_ONLY_PROVISION  := -only=windows-golden-provision-only.qemu.from_install
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay clean clean-force
+.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size clean clean-force
 
 help:
 	@echo "Targets:"
@@ -35,6 +35,8 @@ help:
 	@echo "  download-virtio Download virtio-win ISO and stage drivers for the config CD"
 	@echo "  stage-virtio    Extract VirtIO drivers from downloads/virtio-win.iso"
 	@echo "  push-quay       Push all golden qcow2 images found to Quay (quay.env)"
+	@echo "  optimize-image  Re-encode golden qcow2(s) for smaller file size (IMAGE_OPTIMIZE=0 skips auto step in build)"
+	@echo "  image-size      Report virtual size (DataVolume min) and file size for golden qcow2(s)"
 	@echo "  build-push      make build then push-quay (all images found)"
 	@echo "  clean           Kill Packer QEMU VMs and remove build artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
@@ -112,6 +114,20 @@ push-quay:
 	fi
 
 build-push: build push-quay
+
+optimize-image:
+	@if [ -n "$(GOLDEN_QCOW2)" ]; then \
+	  ./scripts/optimize-qcow2.sh "$(abspath $(GOLDEN_QCOW2))"; \
+	else \
+	  ./scripts/optimize-qcow2.sh --all; \
+	fi
+
+image-size:
+	@if [ -n "$(GOLDEN_QCOW2)" ]; then \
+	  ./scripts/qcow2-size-report.sh "$(abspath $(GOLDEN_QCOW2))"; \
+	else \
+	  ./scripts/qcow2-size-report.sh --all; \
+	fi
 
 clean:
 	./scripts/clean-build.sh

@@ -89,6 +89,7 @@ ${product_key_xml}
       <ComputerName>${computer_name}</ComputerName>
       <TimeZone>UTC</TimeZone>
     </component>
+${specialize_virtio_xml}
 ${specialize_winrm_xml}
   </settings>
   <settings pass="oobeSystem">

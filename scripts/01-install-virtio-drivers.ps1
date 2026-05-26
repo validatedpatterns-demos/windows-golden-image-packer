@@ -1,4 +1,5 @@
 # Install VirtIO storage, network, balloon, and SCSI drivers from WinRM-staged or PROVISION CD media.
+# Marks block/SCSI drivers boot-start so the image can boot with disk.bus virtio on OpenShift/KubeVirt.
 $ErrorActionPreference = 'Stop'
 
 function Get-CdRomDriveLetters {
@@ -87,10 +88,95 @@ function Find-VirtioMediaRoot {
     throw ($diag -join "`n")
 }
 
+function Get-VirtioOsDir {
+    param([string]$MediaRoot)
+
+    foreach ($subdir in @('2k25', '2k22')) {
+        if (Test-Path (Join-Path $MediaRoot "viostor\$subdir\amd64\viostor.inf")) {
+            return $subdir
+        }
+    }
+
+    throw "Could not find viostor.inf under $MediaRoot (expected viostor\2k22 or 2k25)."
+}
+
+function Install-DriverPackage {
+    param([string]$InfPath)
+
+    if (-not (Test-Path $InfPath)) {
+        Write-Warning "Driver INF not found: $InfPath"
+        return $false
+    }
+
+    Write-Host "Installing driver package: $InfPath"
+    pnputil.exe /add-driver $InfPath /install | Out-Host
+    return $true
+}
+
+# pnputil only creates Services\* keys when matching VirtIO PCI hardware is present.
+# The build VM uses IDE, so stage boot drivers explicitly (copy .sys + service registry).
+function Ensure-BootDriverStaged {
+    param(
+        [string]$ServiceName,
+        [string]$SysFileName,
+        [string]$InfPath
+    )
+
+    if (-not (Test-Path $InfPath)) {
+        throw "Driver INF not found: $InfPath"
+    }
+
+    $driverDir = Split-Path -Parent $InfPath
+    $sysSrc = Join-Path $driverDir $SysFileName
+    $sysDst = Join-Path $env:SystemRoot "System32\drivers\$SysFileName"
+
+    Install-DriverPackage -InfPath $InfPath | Out-Null
+
+    if (-not (Test-Path $sysSrc)) {
+        throw "Driver binary not found: $sysSrc"
+    }
+
+    Copy-Item -Path $sysSrc -Destination $sysDst -Force
+    Write-Host "Copied $SysFileName -> $sysDst"
+
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+    if (-not (Test-Path $key)) {
+        New-Item -Path $key -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'Type' -Value 1 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'ErrorControl' -Value 1 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'ImagePath' -Value "System32\drivers\$SysFileName" -PropertyType ExpandString -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'Group' -Value 'SCSI miniport' -PropertyType String -Force | Out-Null
+        Write-Host "Created boot driver service key: $ServiceName"
+    }
+
+    Set-ItemProperty -Path $key -Name 'Start' -Value 0 -Type DWord -Force
+    Write-Host "Boot-start driver: $ServiceName (Start=0)"
+
+    if (-not (Test-Path $sysDst)) {
+        throw "Driver binary missing after staging: $sysDst"
+    }
+}
+
+function Confirm-BootDrivers {
+    param([string[]]$ServiceNames)
+
+    foreach ($name in $ServiceNames) {
+        $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$name"
+        if (-not (Test-Path $key)) {
+            throw "Boot driver service key missing: $name"
+        }
+        $start = (Get-ItemProperty -Path $key -Name 'Start' -ErrorAction SilentlyContinue).Start
+        if ($start -ne 0) {
+            throw "Driver $name is not boot-start (Start=$start, expected 0)."
+        }
+    }
+}
+
 $mediaRoot = Find-VirtioMediaRoot
+$virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot
 $driverPaths = Get-DriverSearchPaths -DriveRoot $mediaRoot
 
-Write-Host "VirtIO media: $mediaRoot"
+Write-Host "VirtIO media: $mediaRoot (OS dir: $virtioOsDir)"
 Write-Host 'Installing VirtIO drivers from paths:'
 $driverPaths | ForEach-Object { Write-Host "  $_" }
 
@@ -98,4 +184,15 @@ foreach ($path in $driverPaths) {
     pnputil.exe /add-driver (Join-Path $path '*.inf') /install | Out-Host
 }
 
-Write-Host 'VirtIO driver installation complete.'
+# Explicit INF install for storage controllers used by KubeVirt disk.bus virtio / virtio-scsi.
+$viostorInf = Join-Path $mediaRoot "viostor\$virtioOsDir\amd64\viostor.inf"
+$vioscsiInf = Join-Path $mediaRoot "vioscsi\$virtioOsDir\amd64\vioscsi.inf"
+$netkvmInf = Join-Path $mediaRoot "NetKVM\$virtioOsDir\amd64\netkvm.inf"
+
+Ensure-BootDriverStaged -ServiceName 'viostor' -SysFileName 'viostor.sys' -InfPath $viostorInf
+Ensure-BootDriverStaged -ServiceName 'vioscsi' -SysFileName 'vioscsi.sys' -InfPath $vioscsiInf
+Install-DriverPackage -InfPath $netkvmInf | Out-Null
+
+Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
+
+Write-Host 'VirtIO driver installation complete (viostor/vioscsi boot-start).'

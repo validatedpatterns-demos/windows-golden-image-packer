@@ -1,10 +1,10 @@
 # Using the golden image in OpenShift Virtualization
 
-The build produces a **sysprepped** **qcow2** image with VirtIO disk/network and the QEMU guest agent installed.
+The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers staged for **OpenShift `disk.bus: virtio`**. The default install still uses **IDE** during Setup; drivers are applied in **specialize** (unattend) and again in WinRM (`01-install-virtio-drivers.ps1`) with **boot-start** storage drivers.
 
 **Firmware:** The default Packer build uses SeaBIOS for install reliability on QEMU 10. For **UEFI** disks (typical OpenShift Virtualization VMs), use [uefi-install.md](uefi-install.md) and verify the image boots with UEFI in your cluster before production rollout.
 
-Import the disk as a DataVolume or containerized disk, then create a `VirtualMachine` with **UEFI** and VirtIO (if your image was built with the UEFI path).
+**VM fails to boot with VirtIO disk?** See [openshift-boot-troubleshooting.md](openshift-boot-troubleshooting.md) (VirtIO boot drivers, UEFI vs BIOS, SATA workaround).
 
 ## Disk and DataVolume size
 
@@ -18,6 +18,27 @@ The qcow2 **virtual size** is set at build time by `disk_size` in `build.pkrvars
 Autounattend creates a small System Reserved partition and **extends** the Windows volume to use the rest of the disk, so lowering `disk_size` and **rebuilding** is the supported way to fit a smaller DataVolume. Shrinking an existing image in place is not supported by this repo.
 
 If you need more than 60G inside the guest, raise `disk_size` before `make build` and use the same value (with a `Gi` suffix) on import.
+
+### Exact DataVolume size after build
+
+The **virtual size** in the qcow2 is the hard minimum for CDI and `virtctl image-upload`. It matches `disk_size` from the build (unless the image was resized manually). The **file size on disk** is separate and is what shrink/optimize reduces.
+
+```bash
+make image-size
+# or
+qemu-img info output/windows-server-2022-standard.qcow2
+./scripts/qcow2-size-report.sh --json output/windows-server-2022-standard.qcow2
+```
+
+Use the reported `DataVolume minimum` (e.g. `60Gi`) for `spec.pvc.resources.requests.storage` and `virtctl image-upload --size=`. Round up only if your cluster documents extra overhead; for standard CDI qcow2 import, matching virtual size in GiB is sufficient.
+
+Host-side re-encoding without rebuilding:
+
+```bash
+make optimize-image
+```
+
+Build runs optimization automatically after rename unless `IMAGE_OPTIMIZE=0`.
 
 ## Import qcow2
 

@@ -57,12 +57,14 @@ build {
       "${path.root}/../scripts/03-configure-openssh.ps1",
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
+      "${path.root}/../scripts/06-shrink-disk.ps1",
     ]
   }
 
   post-processor "shell-local" {
     inline = [
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-provision\" \"${local.output_image_name}\"",
+      "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]
   }
 }

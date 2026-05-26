@@ -41,6 +41,12 @@ locals {
   specialize_winrm_xml   = file("${path.root}/../http/specialize-winrm.xml.tpl")
   firstlogon_commands_xml = file("${path.root}/../http/firstlogon-winrm.xml.tpl")
 
+  # IDE install: stage VirtIO block/SCSI/NIC drivers during specialize (PROVISION CD paths).
+  specialize_virtio_xml = local.include_winpe_virtio_drivers ? "" : templatefile(
+    "${path.root}/../http/specialize-virtio-drivers.xml.tpl",
+    { virtio_os_dir = local.virtio_os_dir }
+  )
+
   # Packer has no xmlencode(); escape characters that break autounattend.xml.
   admin_password_xml = replace(
     replace(
@@ -83,6 +89,7 @@ locals {
     include_winpe_virtio_drivers = local.include_winpe_virtio_drivers
     specialize_winrm_xml          = local.specialize_winrm_xml
     firstlogon_commands_xml       = local.firstlogon_commands_xml
+    specialize_virtio_xml         = local.specialize_virtio_xml
   }
 
   autounattend = templatefile(

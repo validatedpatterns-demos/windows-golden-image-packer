@@ -13,6 +13,7 @@ Build **Windows Server 2022** and **2025** golden images as **qcow2** disks for 
 | OpenSSH | `03-configure-openssh.ps1` (Windows capability) |
 | Administrator password | autounattend + `04-set-administrator-password.ps1` |
 | SSH key injection | `ssh_public_keys` / `ssh_public_keys_file` + `05-inject-ssh-keys.ps1` |
+| Disk shrink + optimize | `06-shrink-disk.ps1` (pre-sysprep); post-build `optimize-qcow2.sh` (auto unless `IMAGE_OPTIMIZE=0`) |
 | qcow2 for OpenShift Virt | QEMU builder, VirtIO disk/net, sysprep; **UEFI install** via [docs/uefi-install.md](docs/uefi-install.md) |
 
 ## Prerequisites
@@ -70,11 +71,52 @@ make download-virtio
    podman login quay.io
    make push-quay                 # pushes every golden qcow2 found
    make build-push                # build both, then push all found
+   make image-size                # DataVolume minimum + file size for built images
    ```
 
 See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for importing the disk and VM settings.
 
 Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO drivers; see [docs/install-phases.md](docs/install-phases.md) for the two-phase flow and optional split builds (`make build-install` / `make build-provision-only`).
+
+## Image size and DataVolume sizing
+
+Two sizes matter:
+
+| Metric | Meaning | How to read it |
+|--------|---------|----------------|
+| **Virtual size** | Guest disk capacity; **minimum DataVolume/PVC** | `make image-size` or `qemu-img info image.qcow2` |
+| **File size** | Bytes stored in the qcow2 (upload/registry) | Same report; reduced by `06-shrink-disk.ps1` + `optimize-qcow2.sh` |
+
+After a build:
+
+```bash
+make image-size
+# or one file:
+make image-size GOLDEN_QCOW2=output/windows-server-2022-standard.qcow2
+```
+
+Example output:
+
+```text
+DataVolume minimum:  60Gi  (storage.requests.storage: 60Gi)
+```
+
+That value is derived from the qcow2 **virtual size** (from `disk_size` at build time, default 60G). It does not shrink when the file is optimized. Set `disk_size` before `make build` if you need a smaller virtual disk.
+
+Re-run host-side optimization without rebuilding:
+
+```bash
+make optimize-image                  # all golden images
+make optimize-image GOLDEN_QCOW2=output/windows-server-2022-standard.qcow2
+```
+
+Skip automatic optimization during build (faster, larger artifact):
+
+```bash
+IMAGE_OPTIMIZE=0 make build
+```
+
+**Note:** `06-shrink-disk.ps1` runs `cipher /w` to zero free space and can add **15–60+ minutes** to the build before sysprep.
 
 ## Variables
 
@@ -114,14 +156,18 @@ flowchart LR
   C --> D[provisioners]
   D --> E[VirtIO + QEMU-GA + OpenSSH]
   E --> F[Password + SSH keys]
-  F --> G[sysprep generalize]
+  F --> S[06 shrink disk + zero free space]
+  S --> G[sysprep generalize]
   G --> H[qcow2 artifact]
+  H --> O[optimize qcow2 on host]
 ```
 
 1. **Unattended install** from ISO with VirtIO storage/network drivers during WinPE.
 2. **WinRM** connects for provisioning scripts.
-3. **Sysprep** generalizes the disk for cloning; image shuts down.
-4. Post-processor renames the qcow2 to `windows-server-{version}-{edition}.qcow2`.
+3. **Disk shrink** clears temporaries and zeros free space so the qcow2 can sparsify.
+4. **Sysprep** generalizes the disk for cloning; image shuts down.
+5. Post-processors rename the qcow2, then **optimize** it (`qemu-img convert -c`) unless `IMAGE_OPTIMIZE=0`.
+6. Run **`make image-size`** for the exact DataVolume storage request.
 
 ## Repository layout
 
@@ -149,6 +195,8 @@ example.pkrvars.hcl
 - **Interrupted or failed build**: `make clean` sends SIGTERM/SIGKILL to `qemu-system` processes whose command line includes `packer-win`, then deletes `output/`, Packer cache dirs, and partial qcow2 files. Use `make clean-force` if cleanup should continue even when a VM process could not be killed.
 
 - **`stage-virtio` permission denied**: virtio-win ISO directories are often mode `555`. The script no longer `rm -rf`s them; it skips if drivers are already present, or `mv`s the old tree to `extras/virtio-win-staged.orphan.*` on refresh. If `mv` fails: `sudo chown -R $(whoami): extras/virtio-win-staged && chmod -R u+rwX extras/virtio-win-staged`.
+
+- **Windows VM will not boot on OpenShift with `bus: virtio`**: common causes are (1) **viostor/vioscsi** not boot-start — rebuild with current `01-install-virtio-drivers.ps1` or see [docs/openshift-boot-troubleshooting.md](docs/openshift-boot-troubleshooting.md); (2) **UEFI VM** + **SeaBIOS-built** image — use UEFI install ([docs/uefi-install.md](docs/uefi-install.md)) or interim `firmware.bootloader.bios` / `bus: sata` for recovery.
 
 - **Will not boot / OVMF PXE / still shows UEFI boot menu**: Packer turns on UEFI whenever `efi_firmware_code` / `efi_firmware_vars` are set, even if `efi_boot = false`. Use `efi_boot = false` and **do not** set OVMF paths in `build.pkrvars.hcl` (or only set them when `efi_boot = true`). Run `make clean`, then `make build`. For **UEFI** golden images use [docs/uefi-install.md](docs/uefi-install.md).
 

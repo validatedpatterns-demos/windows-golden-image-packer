@@ -18,7 +18,7 @@ install_disk_interface = "ide"
 install_net_device     = "e1000"
 ```
 
-The finished **qcow2** works on OpenShift Virtualization with a **VirtIO** disk bus because phase 2 installed the drivers inside the guest.
+The finished **qcow2** can boot on OpenShift with **`disk.bus: virtio`** after phase 2 registers **viostor/vioscsi** as boot-start drivers (and the VM firmware matches the image — UEFI for production; see [docs/openshift-boot-troubleshooting.md](docs/openshift-boot-troubleshooting.md)).
 
 ## Optional: two Packer runs
 
