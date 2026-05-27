@@ -9,5 +9,21 @@ if (-not (Test-Path $sysprep)) {
     throw "Sysprep not found at $sysprep"
 }
 
-Write-Host 'Running sysprep /generalize /oobe /shutdown'
-& $sysprep /generalize /oobe /quiet /shutdown
+$unattend = 'C:\Windows\Panther\unattend.xml'
+$unattendAlt = 'C:\Windows\Temp\sysprep-unattend.xml'
+if (-not (Test-Path $unattend) -and (Test-Path $unattendAlt)) {
+    New-Item -ItemType Directory -Path (Split-Path $unattend) -Force | Out-Null
+    Copy-Item -Path $unattendAlt -Destination $unattend -Force
+}
+
+$sysprepArgs = @('/generalize', '/oobe', '/quiet', '/shutdown')
+if (Test-Path $unattend) {
+    Write-Host "Running sysprep with unattend: $unattend"
+    $sysprepArgs += "/unattend:$unattend"
+}
+else {
+    Write-Warning 'No sysprep unattend at C:\Windows\Panther\unattend.xml — OOBE may prompt for a product key on first boot'
+}
+
+Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
+& $sysprep @sysprepArgs

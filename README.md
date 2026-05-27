@@ -76,6 +76,12 @@ make download-virtio
 
 See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for importing the disk and VM settings.
 
+5. **Optional:** boot-test the image before upload (VirtIO disk, overlay copy — does not modify the golden qcow2) — [docs/boot-test.md](docs/boot-test.md):
+
+   ```bash
+   make boot-test-2025
+   ```
+
 Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO drivers; see [docs/install-phases.md](docs/install-phases.md) for the two-phase flow and optional split builds (`make build-install` / `make build-provision-only`).
 
 ## Image size and DataVolume sizing

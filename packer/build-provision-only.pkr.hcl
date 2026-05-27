@@ -45,6 +45,11 @@ build {
   }
 
   provisioner "file" {
+    content     = local.sysprep_unattend
+    destination = "C:/Windows/Panther/unattend.xml"
+  }
+
+  provisioner "file" {
     destination = "C:/Windows/Temp/"
     source      = "${path.root}/../drivers"
   }

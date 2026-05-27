@@ -24,7 +24,7 @@ PACKER_ONLY_PROVISION  := -only=windows-golden-provision-only.qemu.from_install
 # prevents "make build" (2022 then 2025) from removing the previous qcow2.
 PACKER_STAGING         = .packer-$(VERSION)
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size clean clean-force
+.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image clean clean-force
 
 help:
 	@echo "Targets:"
@@ -41,6 +41,10 @@ help:
 	@echo "  push-quay       Push all golden qcow2 images found to Quay (quay.env)"
 	@echo "  optimize-image  Re-encode golden qcow2(s) for smaller file size (IMAGE_OPTIMIZE=0 skips auto step in build)"
 	@echo "  image-size      Report virtual size (DataVolume min) and file size for golden qcow2(s)"
+	@echo "  boot-test       Boot-test newest golden image (virtio disk, copy-on-write overlay)"
+	@echo "  boot-test-all   Boot-test every golden qcow2 under output/"
+	@echo "  boot-test-2022  boot-test-2025   version-specific boot tests"
+	@echo "  boot-test-image IMAGE=path/to.qcow2   test one file"
 	@echo "  build-push      make build then push-quay (all images found)"
 	@echo "  clean           Kill Packer QEMU VMs and remove build artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
@@ -140,6 +144,22 @@ image-size:
 	else \
 	  ./scripts/qcow2-size-report.sh --all; \
 	fi
+
+boot-test:
+	./scripts/boot-test-golden.sh
+
+boot-test-all:
+	./scripts/boot-test-golden.sh --all
+
+boot-test-2022:
+	./scripts/boot-test-golden.sh --version 2022
+
+boot-test-2025:
+	./scripts/boot-test-golden.sh --version 2025
+
+boot-test-image:
+	@test -n "$(IMAGE)" || (echo "Set IMAGE=path/to/windows-server-*.qcow2" >&2; exit 1)
+	./scripts/boot-test-image.sh --image "$(abspath $(IMAGE))"
 
 clean:
 	./scripts/clean-build.sh

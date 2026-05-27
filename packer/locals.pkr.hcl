@@ -67,21 +67,27 @@ locals {
 
   windows_product_key = var.windows_version == "2025" ? var.product_key_2025 : var.product_key_2022
 
-  product_key_xml = local.windows_product_key != "" ? templatefile("${path.root}/../http/product-key.xml.tpl", {
-    product_key = replace(
+  windows_product_key_xml = local.windows_product_key != "" ? replace(
+    replace(
       replace(
-        replace(
-          replace(replace(local.windows_product_key, "&", "&amp;"), "<", "&lt;"),
-          ">",
-          "&gt;"
-        ),
-        "\"",
-        "&quot;"
+        replace(replace(local.windows_product_key, "&", "&amp;"), "<", "&lt;"),
+        ">",
+        "&gt;"
       ),
-      "'",
-      "&apos;"
-    )
+      "\"",
+      "&quot;"
+    ),
+    "'",
+    "&apos;"
+  ) : ""
+
+  product_key_xml = local.windows_product_key_xml != "" ? templatefile("${path.root}/../http/product-key.xml.tpl", {
+    product_key = local.windows_product_key_xml
   }) : ""
+
+  sysprep_unattend = templatefile("${path.root}/../http/sysprep-unattend.xml.tpl", {
+    product_key = local.windows_product_key_xml
+  })
 
   autounattend_template_vars = {
     windows_image_name           = local.windows_image_name
@@ -89,6 +95,7 @@ locals {
     computer_name                = "WIN-PACKER"
     virtio_driver_paths_xml      = local.virtio_driver_paths_xml
     product_key_xml              = local.product_key_xml
+    product_key                  = local.windows_product_key_xml
     include_winpe_virtio_drivers = local.include_winpe_virtio_drivers
     specialize_winrm_xml          = local.specialize_winrm_xml
     firstlogon_commands_xml       = local.firstlogon_commands_xml

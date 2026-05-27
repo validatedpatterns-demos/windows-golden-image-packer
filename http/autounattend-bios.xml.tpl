@@ -93,6 +93,9 @@ ${product_key_xml}
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>${computer_name}</ComputerName>
       <TimeZone>UTC</TimeZone>
+%{if product_key != ""~}
+      <ProductKey>${product_key}</ProductKey>
+%{endif~}
     </component>
 ${specialize_virtio_xml}
 ${specialize_winrm_xml}
