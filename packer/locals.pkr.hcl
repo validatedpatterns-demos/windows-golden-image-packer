@@ -86,7 +86,8 @@ locals {
   }) : ""
 
   sysprep_unattend = templatefile("${path.root}/../http/sysprep-unattend.xml.tpl", {
-    product_key = local.windows_product_key_xml
+    product_key     = local.windows_product_key_xml
+    admin_password  = local.admin_password_xml
   })
 
   autounattend_template_vars = {

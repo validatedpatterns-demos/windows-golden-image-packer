@@ -18,6 +18,7 @@
 #   BOOT_TEST_GRAPHICS=vnc         # vnc or none
 #   BOOT_TEST_KEEP_VM=0
 #   BOOT_TEST_KEEP_DISK=0
+#   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines   # overlay qcow2 directory (needs free space)
 #   VAR_FILE=build.pkrvars.hcl     # used for memory/vcpus when unset
 set -euo pipefail
 
@@ -33,6 +34,7 @@ GRAPHICS="${BOOT_TEST_GRAPHICS:-vnc}"
 KEEP_VM="${BOOT_TEST_KEEP_VM:-0}"
 KEEP_DISK="${BOOT_TEST_KEEP_DISK:-0}"
 DRY_RUN="${BOOT_TEST_DRY_RUN:-0}"
+WORK_BASE="${BOOT_TEST_WORK_DIR:-$HOME/VirtualMachines}"
 
 IMAGE=""
 VM_NAME=""
@@ -157,6 +159,61 @@ require_cmd() {
   done
 }
 
+libvirt_qemu_user() {
+  local u
+  if [[ -r /etc/libvirt/qemu.conf ]]; then
+    u="$(awk -F= '/^[[:space:]]*user[[:space:]]*=/ {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+      gsub(/"/, "", $2)
+      if ($2 !~ /^\+/) { print $2; exit }
+    }' /etc/libvirt/qemu.conf)"
+  fi
+  if [[ -z "${u:-}" ]] || ! getent passwd "$u" &>/dev/null; then
+    u="qemu"
+  fi
+  echo "$u"
+}
+
+libvirt_uses_system_qemu() {
+  [[ "$CONNECT" == qemu://* && "$CONNECT" != *session* ]]
+}
+
+grant_qemu_traverse_parents() {
+  local qemu_user="$1" target="$2" dir
+  target="$(readlink -f "$target")"
+  if [[ -f "$target" ]]; then
+    dir="$(dirname "$target")"
+  else
+    dir="$target"
+  fi
+  while [[ -n "$dir" && "$dir" != "/" ]]; do
+    if ! setfacl -m "u:${qemu_user}:x" "$dir"; then
+      echo "Failed to grant $qemu_user traverse on $dir (install acl?)" >&2
+      return 1
+    fi
+    dir="$(dirname "$dir")"
+  done
+}
+
+grant_qemu_system_storage_access() {
+  local qemu_user disk backing disk_dir
+  command -v setfacl >/dev/null || {
+    echo "setfacl is required for $CONNECT when disks are under your home directory." >&2
+    echo "Install the acl package, or set BOOT_TEST_CONNECT=qemu:///session to run VMs as your user." >&2
+    exit 1
+  }
+  qemu_user="$(libvirt_qemu_user)"
+  disk="$(readlink -f "$1")"
+  backing="$(readlink -f "$2")"
+  grant_qemu_traverse_parents "$qemu_user" "$disk" || exit 1
+  grant_qemu_traverse_parents "$qemu_user" "$backing" || exit 1
+  disk_dir="$(dirname "$disk")"
+  setfacl -m "u:${qemu_user}:rx" "$disk_dir" || exit 1
+  setfacl -m "u:${qemu_user}:rw" "$disk" || exit 1
+  setfacl -m "u:${qemu_user}:r" "$backing" || exit 1
+  echo "Granted $qemu_user ACL access to overlay and backing file." >&2
+}
+
 require_cmd virsh virt-install qemu-img stat
 
 if ! virsh --connect "$CONNECT" uri &>/dev/null; then
@@ -172,7 +229,8 @@ fi
 ORIG_SIZE="$(stat -c%s "$IMAGE")"
 ORIG_MTIME="$(stat -c%Y "$IMAGE")"
 
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/boot-test.XXXXXX")"
+mkdir -p "$WORK_BASE"
+WORK_DIR="$(mktemp -d "$WORK_BASE/boot-test.XXXXXX")"
 TEST_DISK="$WORK_DIR/disk.qcow2"
 
 echo "Golden image (read-only backing): $IMAGE"
@@ -188,6 +246,10 @@ if [[ "$DRY_RUN" == 1 ]]; then
 fi
 
 qemu-img create -f qcow2 -F qcow2 -b "$IMAGE" "$TEST_DISK" >/dev/null
+
+if libvirt_uses_system_qemu; then
+  grant_qemu_system_storage_access "$TEST_DISK" "$IMAGE"
+fi
 
 if virsh --connect "$CONNECT" dominfo "$VM_NAME" &>/dev/null; then
   echo "Removing existing domain $VM_NAME" >&2
