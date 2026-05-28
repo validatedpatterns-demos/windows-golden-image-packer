@@ -180,11 +180,30 @@ function Set-EnUsIntlRegistry {
 }
 
 function Set-PreSysprepAccountPolicy {
-    & net.exe user Administrator /logonpasswordchg:no | Out-Host
-    & wmic.exe useraccount where "name='Administrator'" set PasswordExpires=FALSE | Out-Host
-    & reg.exe add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f | Out-Host
-    & reg.exe delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f 2>$null | Out-Null
-    & reg.exe delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /f 2>$null | Out-Null
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & net.exe user Administrator /logonpasswordchg:no 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "net user Administrator /logonpasswordchg:no exited $LASTEXITCODE"
+        }
+
+        $admin = Get-CimInstance -ClassName Win32_UserAccount -Filter "Name='Administrator' and LocalAccount=True" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($admin) {
+            Set-CimInstance -InputObject $admin -Property @{ PasswordExpires = $false } -ErrorAction SilentlyContinue | Out-Null
+        } else {
+            & wmic.exe useraccount where "name='Administrator'" set PasswordExpires=FALSE 2>&1 | Out-Host
+        }
+
+        $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        Set-ItemProperty -LiteralPath $winlogon -Name 'AutoAdminLogon' -Value '0' -Type String -Force
+        foreach ($valueName in @('DefaultPassword', 'DefaultUserName')) {
+            Remove-ItemProperty -LiteralPath $winlogon -Name $valueName -ErrorAction SilentlyContinue
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
 }
 
 try {

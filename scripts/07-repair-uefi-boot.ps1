@@ -5,7 +5,12 @@
 # Run after virtio driver install and before sysprep so virtio + UEFI boots on KubeVirt/libvirt.
 $ErrorActionPreference = 'Stop'
 
+Import-Module Storage -ErrorAction SilentlyContinue
+
 function Get-EfiPartition {
+    if (-not (Get-Command Get-Partition -ErrorAction SilentlyContinue)) {
+        throw 'Get-Partition unavailable (Storage module not loaded).'
+    }
     $esp = Get-Partition -ErrorAction SilentlyContinue |
         Where-Object { $_.Type -eq 'System' -or $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
         Select-Object -First 1
@@ -15,21 +20,47 @@ function Get-EfiPartition {
     return $esp
 }
 
+function Mount-EspWithDiskPart {
+    param(
+        [int]$DiskNumber,
+        [int]$PartitionNumber
+    )
+
+    foreach ($letter in @('S', 'T', 'U', 'V', 'W', 'X')) {
+        $script = @"
+select disk $DiskNumber
+select partition $PartitionNumber
+assign letter=$letter
+"@
+        $null = $script | & diskpart.exe 2>&1
+        if ($LASTEXITCODE -eq 0 -and (Test-Path "${letter}:\")) {
+            return "${letter}:\"
+        }
+    }
+    throw 'Could not assign a drive letter to the EFI system partition (diskpart).'
+}
+
 function Get-EfiMountPath {
     param($Partition)
 
-    $vol = Get-Volume -Partition $Partition -ErrorAction SilentlyContinue
-    if ($vol -and $vol.DriveLetter) {
-        return "$($vol.DriveLetter):\"
+    if (Get-Command Get-Volume -ErrorAction SilentlyContinue) {
+        $vol = Get-Volume -Partition $Partition -ErrorAction SilentlyContinue
+        if ($vol -and $vol.DriveLetter) {
+            return "$($vol.DriveLetter):\"
+        }
     }
 
-    $access = (Mount-Partition -Partition $Partition -PassThru -ErrorAction Stop).AccessPaths |
-        Where-Object { $_ -match '^[A-Z]:\\$' } |
-        Select-Object -First 1
-    if (-not $access) {
-        throw 'Could not mount EFI system partition to a drive letter.'
+    if (Get-Command Mount-Partition -ErrorAction SilentlyContinue) {
+        $mounted = Mount-Partition -Partition $Partition -PassThru -ErrorAction SilentlyContinue
+        $access = $mounted.AccessPaths |
+            Where-Object { $_ -match '^[A-Z]:\\$' } |
+            Select-Object -First 1
+        if ($access) {
+            return $access
+        }
     }
-    return $access
+
+    return Mount-EspWithDiskPart -DiskNumber $Partition.DiskNumber -PartitionNumber $Partition.PartitionNumber
 }
 
 try {

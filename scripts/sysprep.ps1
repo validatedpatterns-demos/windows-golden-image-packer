@@ -52,7 +52,7 @@ if (Test-Path $sysprepStatus) {
 }
 
 if (-not (Test-Path $generalizeUnattend)) {
-    throw "Missing $generalizeUnattend (specialize/generalize only — no oobeSystem)"
+    throw "Missing $generalizeUnattend (specialize/generalize only - no oobeSystem)"
 }
 $oobeSource = Resolve-OobeUnattendPath
 
@@ -64,10 +64,10 @@ Copy-Item -Path $oobeSource -Destination (Join-Path $panther 'unattend.xml') -Fo
 Copy-Item -Path $oobeSource -Destination 'C:\unattend.xml' -Force
 $oobeXml = Get-Content -Path (Join-Path $panther 'unattend.xml') -Raw
 if ($oobeXml -notmatch 'Microsoft-Windows-International-Core') {
-    throw 'Panther unattend missing International-Core before sysprep — not sysprep-oobe.xml'
+    throw 'Panther unattend missing International-Core before sysprep - not sysprep-oobe.xml'
 }
 if ($oobeXml -match '<AutoLogon>[\s\S]*?<Enabled>true</Enabled>') {
-    throw 'Panther unattend still has install AutoLogon — replace with sysprep-oobe.xml before sysprep'
+    throw 'Panther unattend still has install AutoLogon - replace with sysprep-oobe.xml before sysprep'
 }
 Write-Host "Staged OOBE-only unattend in Panther for first deploy boot"
 

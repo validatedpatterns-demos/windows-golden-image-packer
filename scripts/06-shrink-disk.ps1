@@ -93,7 +93,7 @@ Invoke-OptionalStep 'disabling hibernation' {
     }
 }
 
-Write-Host '=== Disk shrink: zeroing free space on C: (cipher /w — may take 15-60+ minutes) ==='
+Write-Host '=== Disk shrink: zeroing free space on C: (cipher /w - may take 15-60+ minutes) ==='
 $cipherDir = 'C:\Windows\Temp\golden-image-cipher-wipe'
 New-Item -ItemType Directory -Path $cipherDir -Force | Out-Null
 try {
