@@ -1,8 +1,10 @@
 # Using the golden image in OpenShift Virtualization
 
-The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers staged for **OpenShift `disk.bus: virtio`**. The default install still uses **IDE** during Setup; drivers are applied in **specialize** (unattend) and again in WinRM (`01-install-virtio-drivers.ps1`) with **boot-start** storage drivers.
+The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers staged for **OpenShift `disk.bus: scsi`** (virtio-scsi controller). UEFI installs use **SATA** during Setup so OVMF/WinPE are reliable; **vioscsi** is boot-start for runtime SCSI disks. Do not use **`bus: virtio`** (virtio-blk) unless your cluster OVMF is known to boot it — many hosts show **no bootable device**.
 
-**Firmware:** The default Packer build uses SeaBIOS for install reliability on QEMU 10. For **UEFI** disks (typical OpenShift Virtualization VMs), use [uefi-install.md](uefi-install.md) and verify the image boots with UEFI in your cluster before production rollout.
+**Firmware:** Default **`efi_boot = true`** builds **UEFI + GPT** images ([uefi-install.md](uefi-install.md)). OpenShift `VirtualMachine` specs must use **UEFI** firmware (`firmware.bootloader.efi`), not SeaBIOS. Boot-testing with `make boot-test` uses UEFI when `efi_boot` is true. SeaBIOS-only disks (`efi_boot = false`) will not boot in a UEFI VM.
+
+**TPM:** Default **`vtpm = true`** (with UEFI) exposes an emulated **TPM 2.0** during build and boot-test (`swtpm` on the host). On OpenShift Virtualization, add a **vTPM** to the VM. For production (BitLocker, persistent secrets), set **`persistent: true`** and configure **`vmStateStorageClass`** on the HyperConverged CR; see [OKD vTPM](https://docs.okd.io/latest/virt/managing_vms/virt-using-vtpm-devices.html).
 
 **VM fails to boot with VirtIO disk?** See [openshift-boot-troubleshooting.md](openshift-boot-troubleshooting.md) (VirtIO boot drivers, UEFI vs BIOS, SATA workaround).
 
@@ -76,10 +78,11 @@ To publish the same disk to **Quay** as a container image (optional), see [quay-
 ## VirtualMachine hints
 
 - **Firmware**: UEFI (use the virt-install UEFI base disk, or confirm your Packer-built image boots with UEFI in a test VM)
+- **TPM**: vTPM device (recommended; matches golden-image build defaults)
 - **Disk bus**: VirtIO
 - **Network**: masquerade/bridge with **VirtIO** model
 - **QEMU guest agent**: enabled on the VM spec so node operations work
-- **First boot**: sysprep OOBE runs once (locale and Administrator password come from `http/sysprep-unattend.xml.tpl`); the VM should stop at the **Administrator sign-in** screen (autologon is cleared before sysprep and disabled in the sysprep answer file). Set hostname and license per your process.
+- **First boot**: sysprep OOBE runs once (locale and Administrator password come from `http/sysprep-oobe.xml.tpl` in `C:\Windows\Panther\unattend.xml`); the VM should stop at the **Administrator sign-in** screen. Set hostname and license per your process.
 
 ```yaml
 spec:
@@ -90,11 +93,13 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: virtio
+                bus: scsi
           interfaces:
             - name: default
               masquerade: {}
               model: virtio
+          tpm:
+            persistent: true
         features:
           acpi: {}
           smm:

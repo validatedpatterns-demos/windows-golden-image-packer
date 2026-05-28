@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 Red Hat, Inc.
+  SPDX-License-Identifier: Apache-2.0
+
+  Default region/language for OOBE UI (does not replace unattend oobeSystem).
+  Deployed to %WINDIR%\System32\Oobe\Info\oobe.xml by configure-oobe-locale.ps1.
+-->
+<FirstExperience>
+  <oobe>
+    <defaults>
+      <language>1033</language>
+      <location>244</location>
+      <keyboard>0409:00000409</keyboard>
+    </defaults>
+  </oobe>
+</FirstExperience>

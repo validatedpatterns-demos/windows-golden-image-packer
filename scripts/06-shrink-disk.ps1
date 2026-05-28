@@ -10,9 +10,11 @@ function Test-PreserveTempItem {
 
     $name = $Item.Name
     if ($name -eq 'sysprep.ps1') { return $true }
+    if ($name -like 'sysprep-*.xml' -or $name -eq 'oobe-info-defaults.xml') { return $true }
     if ($name -eq 'drivers' -or $name -eq 'virtio-drivers') { return $true }
     if ($name -like 'packer-*') { return $true }
     if ($Item -is [System.IO.FileInfo] -and $name -like '*.ps1') { return $true }
+    if ($name -eq 'configure-oobe-locale.log') { return $true }
     return $false
 }
 

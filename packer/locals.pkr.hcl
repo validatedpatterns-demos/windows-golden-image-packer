@@ -19,10 +19,13 @@ locals {
 
   windows_iso_path = var.windows_version == "2025" ? var.windows_iso_path_2025 : var.windows_iso_path_2022
 
-  # Phase 1 (WinPE): IDE needs no VirtIO storage drivers on the PROVISION CD.
+  # WinPE VirtIO driver paths only when installing to a virtio/virtio-scsi disk (not UEFI+SATA).
   include_winpe_virtio_drivers = contains(["virtio", "virtio-scsi"], var.install_disk_interface)
 
   install_machine_type = var.efi_boot ? "q35" : "pc"
+
+  # TPM 2.0 requires UEFI/q35; Packer plugin starts swtpm when vtpm is true.
+  use_vtpm = var.efi_boot && var.vtpm
 
   output_image_name = "windows-server-${var.windows_version}-${lower(var.windows_edition)}.qcow2"
 
@@ -85,9 +88,10 @@ locals {
     product_key = local.windows_product_key_xml
   }) : ""
 
-  sysprep_unattend = templatefile("${path.root}/../http/sysprep-unattend.xml.tpl", {
-    product_key     = local.windows_product_key_xml
-    admin_password  = local.admin_password_xml
+  # Split sysprep answer files: generalize-only for sysprep.exe, oobe-only for Panther on first deploy boot.
+  sysprep_generalize_unattend = templatefile("${path.root}/../http/sysprep-generalize.xml.tpl", {})
+  sysprep_oobe_unattend = templatefile("${path.root}/../http/sysprep-oobe.xml.tpl", {
+    admin_password = local.admin_password_xml
   })
 
   autounattend_template_vars = {

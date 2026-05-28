@@ -18,8 +18,9 @@ windows_iso_path_2025 = "/path/to/windows-server-2025.iso"
 
 virtio_win_iso_path = "/path/to/virtio-win.iso"
 
-# Phase 1 install bus (ide = reliable unattend; virtio installed in phase 2 via WinRM)
-install_disk_interface = "ide"
+# UEFI builds: install/provision on SATA (WinPE/OVMF). Runtime boot uses virtio-scsi (disk bus scsi on the VM).
+# SeaBIOS dev builds: ide. Do not use virtio-blk alone under OVMF — it shows "no bootable device".
+install_disk_interface = "sata"
 install_net_device     = "e1000"
 
 admin_password = "ChangeMe-Use-A-Strong-Password!"
@@ -37,11 +38,19 @@ vm_cpus          = 4
 vm_memory        = 8192
 # Virtual disk size; match or exceed this in DataVolume/PVC (e.g. 60G -> storage: 60Gi).
 disk_size        = "60G"
-headless         = true
+headless         = false
 
-# Leave false on Fedora/QEMU 10 — SeaBIOS boots the Windows ISO reliably. See docs/uefi-install.md.
-efi_boot = false
+# true (default): UEFI install via virt-install, then Packer provision + sysprep (OpenShift/CNV).
+# false: one-shot SeaBIOS Packer build — do not deploy those disks to UEFI VMs.
+efi_boot = true
 
-# Only used when efi_boot = true (Packer enables UEFI if these are wired in unconditionally).
-# ovmf_code_path = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
-# ovmf_vars_path  = "/usr/share/edk2/ovmf/OVMF_VARS.fd"
+# virt-install Setup firmware: seabios (default) boots Microsoft UDF DVD; uefi often BdsDxe timeouts on QEMU 10.
+# install_firmware = "seabios"
+
+# Emulated TPM 2.0 (swtpm) on UEFI builds; disable only for hosts without swtpm.
+vtpm = true
+
+# OVMF paths (optional; virt-install auto-picks a matching pair). On Fedora 44+ use 4M firmware
+# for q35 — do not point at 2M OVMF_CODE.fd alone or the VM may not boot:
+# ovmf_code_path = "/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2"
+# ovmf_vars_path  = "/usr/share/edk2/ovmf/OVMF_VARS_4M.qcow2"

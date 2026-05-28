@@ -21,7 +21,8 @@ ${virtio_driver_paths_xml}
       <SetupUILanguage>
         <UILanguage>en-US</UILanguage>
       </SetupUILanguage>
-      <InputLocale>en-US</InputLocale>
+      <UILanguageFallback>en-US</UILanguageFallback>
+      <InputLocale>0409:00000409</InputLocale>
       <SystemLocale>en-US</SystemLocale>
       <UILanguage>en-US</UILanguage>
       <UserLocale>en-US</UserLocale>
@@ -29,6 +30,7 @@ ${virtio_driver_paths_xml}
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DiskConfiguration>
+        <WillShowUI>Never</WillShowUI>
         <Disk wcm:action="add">
           <DiskID>0</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
@@ -62,7 +64,7 @@ ${virtio_driver_paths_xml}
             </ModifyPartition>
             <ModifyPartition wcm:action="add">
               <Order>3</Order>
-              <PartitionID>3</Order>
+              <PartitionID>3</PartitionID>
               <Format>NTFS</Format>
               <Label>Windows</Label>
               <Letter>C</Letter>
@@ -105,6 +107,14 @@ ${specialize_virtio_xml}
 ${specialize_winrm_xml}
   </settings>
   <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+      publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UILanguageFallback>en-US</UILanguageFallback>
+      <UserLocale>en-US</UserLocale>
+    </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <AutoLogon>

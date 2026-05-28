@@ -25,8 +25,25 @@ variable "windows_edition" {
 
 variable "efi_boot" {
   type        = bool
-  description = "Use UEFI/OVMF for install. On Fedora with QEMU 10, leave false. Packer enables UEFI if efi_firmware_* paths are set in build.pkr.hcl even when this is false."
-  default     = false
+  description = "UEFI/OVMF golden images for OpenShift Virtualization. true: virt-install install + mbr2gpt during provision + OVMF sysprep (recommended). false: single-pass SeaBIOS Packer build (dev hosts only)."
+  default     = true
+}
+
+variable "install_firmware" {
+  type        = string
+  description = "Firmware for virt-install Windows Setup only: seabios (default; boots Microsoft UDF DVD) or uefi (direct OVMF DVD boot; often times out on Fedora QEMU 10). Final golden image is still UEFI when efi_boot=true."
+  default     = "seabios"
+
+  validation {
+    condition     = contains(["seabios", "uefi"], var.install_firmware)
+    error_message = "The install_firmware variable must be seabios or uefi."
+  }
+}
+
+variable "vtpm" {
+  type        = bool
+  description = "Emulated TPM 2.0 (swtpm) on UEFI/q35 VMs during build and install. Matches OpenShift Virtualization vTPM expectations for Windows Server 2022+."
+  default     = true
 }
 
 variable "windows_iso_path_2022" {
@@ -48,22 +65,19 @@ variable "virtio_win_iso_path" {
 
 variable "product_key_2022" {
   type        = string
-  description = "Optional product key for Windows Server 2022 installs (MAK, KMS, or GVLK). Leave empty to skip."
+  description = "Optional product key for Windows Server 2022 installs (MAK, KMS, or GVLK). Leave empty to skip. Not marked sensitive so scripts/render-autounattend.sh can emit valid XML (values may appear in Packer logs)."
   default     = ""
-  sensitive   = true
 }
 
 variable "product_key_2025" {
   type        = string
-  description = "Optional product key for Windows Server 2025 installs (MAK, KMS, or GVLK). Leave empty to skip."
+  description = "Optional product key for Windows Server 2025 installs (MAK, KMS, or GVLK). Leave empty to skip. Not marked sensitive so scripts/render-autounattend.sh can emit valid XML (values may appear in Packer logs)."
   default     = ""
-  sensitive   = true
 }
 
 variable "admin_password" {
   type        = string
-  description = "Password for the built-in Administrator account."
-  sensitive   = true
+  description = "Password for the built-in Administrator account. Not marked sensitive so scripts/render-autounattend.sh can emit valid XML (may appear in Packer logs)."
 }
 
 variable "ssh_public_keys" {
@@ -135,8 +149,9 @@ variable "install_net_device" {
 }
 
 variable "headless" {
-  type    = bool
-  default = true
+  type        = bool
+  description = "Packer QEMU display. false shows the install console (VNC); true is headless CI."
+  default     = false
 }
 
 variable "qemu_accelerator" {
@@ -148,13 +163,13 @@ variable "qemu_accelerator" {
 variable "ovmf_code_path" {
   type        = string
   description = "Path to OVMF UEFI firmware CODE file (required for OpenShift Virtualization / KubeVirt)."
-  default     = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
+  default     = "/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2"
 }
 
 variable "ovmf_vars_path" {
   type        = string
   description = "Path to OVMF UEFI firmware VARS template."
-  default     = "/usr/share/edk2/ovmf/OVMF_VARS.fd"
+  default     = "/usr/share/edk2/ovmf/OVMF_VARS_4M.qcow2"
 }
 
 variable "winrm_username" {

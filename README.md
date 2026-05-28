@@ -27,7 +27,7 @@ On a Linux build host with KVM:
 
 ```bash
 # Fedora/RHEL example
-sudo dnf install -y packer qemu-kvm edk2-ovmf
+sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm
 
 # Download virtio-win (optional helper)
 make download-virtio
@@ -219,7 +219,9 @@ example.pkrvars.hcl
 
 - **Invalid autounattend for pass [specialize]**: WinRM runs via `Microsoft-Windows-Deployment` / `RunSynchronous` / `Path` (not `CommandLine` under `Shell-Setup`). Invalid settings like `EnableFirewall` under `Microsoft-Windows-Setup` were removed. Run `make clean` so the floppy is regenerated.
 
-- **Installer runs but asks for language/edition/disk (unattend ignored)**: ensure `efi_boot = false` (floppy carries `autounattend.xml`) and `make stage-virtio` completed. Check `%WINDIR%\Panther\setuperr.log` in the VM if a step fails.
+- **BdsDxe: No bootable option / DVD Time out**: OVMF cannot start the Microsoft ISO UEFI loader on many Fedora/QEMU 10 hosts. Use default **`install_firmware = "seabios"`** (see `example.pkrvars.hcl`); install uses SeaBIOS, Packer runs **`mbr2gpt`**. See [docs/uefi-install.md](docs/uefi-install.md).
+- **Windows cannot be installed to this disk … GPT partition style**: you booted **UEFI** while using the **MBR** answer file, or the opposite. Default **`install_firmware = "seabios"`** uses `autounattend-bios.xml.tpl`. Do not pick a UEFI DVD entry during a SeaBIOS install.
+- **Installer runs but asks for language/edition/disk (unattend ignored)**: for UEFI builds, confirm `wimlib-imagex` injected autounattend (`Install ISO with autounattend in boot.wim` in the log). For SeaBIOS (`efi_boot = false`), the floppy carries `autounattend.xml`. Run `make stage-virtio`. Check `%WINDIR%\Panther\setuperr.log` in the VM if a step fails.
 
 - **Install cannot see disk**: VirtIO SCSI needs `vioscsi` + `viostor` on the PROVISION CD; re-run `make stage-virtio` and confirm `drivers/vioscsi/2k22/amd64/vioscsi.sys` exists.
 
@@ -239,7 +241,7 @@ example.pkrvars.hcl
 
 - **WinRM timeout (general)**: ensure the build host can reach the VM on port 5985; try `headless = false` to watch setup.
 - **Wrong edition**: confirm `/IMAGE/NAME` in the ISO matches `locals.edition_image_names` in `packer/locals.pkr.hcl`.
-- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version` (`make build-2025` passes `-var windows_version=2025`). There is no generic `product_key` variable. Omit both to install without a key (evaluation/grace, or activate later via KMS). `packer console` shows `<sensitive>` for keys in logs only; the floppy/CD still contains the real key. Verify: `VERSION=2025 UEFI=0 bash scripts/render-autounattend.sh | grep -A2 ProductKey`.
+- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version` (`make build-2025` passes `-var windows_version=2025`). There is no generic `product_key` variable. Omit both to install without a key (evaluation/grace, or activate later via KMS). `scripts/render-autounattend.sh` validates XML with `xmllint` before virt-install. Verify: `VERSION=2022 bash scripts/render-autounattend.sh | xmllint --noout -`.
 - **2025 key rejected during setup**: the key must match the edition (`windows_edition` Standard vs Datacenter) and your licensing channel (MAK from VLSC vs KMS GVLK). For KMS clients use the Microsoft GVLK for the edition (for example Server 2025 Standard: `TVRH6-WHNXV-R9WG3-9XRFY-MY832`) and activate against your KMS host after deploy. A 2022 MAK/GVLK will not work on 2025 media. Split install (`make build-install`) requires `VERSION=2025` or it defaults to 2022 and uses `product_key_2022`.
 - **OVMF not found**: set `ovmf_code_path` / `ovmf_vars_path` for your distribution.
 

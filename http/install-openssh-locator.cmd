@@ -6,7 +6,7 @@ if exist A:\install-openssh-server.ps1 (
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File A:\install-openssh-server.ps1
   exit /b %ERRORLEVEL%
 )
-for %%G in (D E F G H) do if exist %%G:\install-openssh-server.ps1 (
+for %%G in (D E F G H A B C) do if exist %%G:\install-openssh-server.ps1 (
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File %%G:\install-openssh-server.ps1
   exit /b %ERRORLEVEL%
 )

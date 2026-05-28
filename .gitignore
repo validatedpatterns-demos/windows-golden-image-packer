@@ -13,6 +13,9 @@ packer-manifest.json
 *.iso
 downloads/
 
+# Logfiles
+golden-logs/
+
 # VirtIO driver trees (created by: make stage-virtio; do not commit)
 drivers/
 drivers.orphan.*/

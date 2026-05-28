@@ -23,6 +23,7 @@ source "qemu" "install" {
   efi_boot          = var.efi_boot
   efi_firmware_code = var.efi_boot ? var.ovmf_code_path : ""
   efi_firmware_vars = var.efi_boot ? var.ovmf_vars_path : ""
+  vtpm              = local.use_vtpm
 
   iso_url      = local.windows_iso_path
   iso_checksum = "none"

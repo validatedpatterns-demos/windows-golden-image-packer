@@ -8,6 +8,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=scripts/libvirt-cleanup.sh
+source "$ROOT/scripts/libvirt-cleanup.sh"
+
 FORCE="${FORCE:-0}"
 KILL_WAIT="${KILL_WAIT:-3}"
 
@@ -109,12 +112,20 @@ remove_artifacts() {
   log "Artifact cleanup done."
 }
 
+clean_libvirt() {
+  log "Removing libvirt domains from this project (virt-install / boot-test)..."
+  libvirt_cleanup_project_domains 0
+  libvirt_cleanup_boot_test_workdirs
+  log "Libvirt cleanup done."
+}
+
 main() {
   if [[ "${1:-}" == "--artifacts-only" ]]; then
     remove_artifacts
     exit 0
   fi
 
+  clean_libvirt
   stop_qemu || [[ "$FORCE" == "1" ]] || exit 1
   remove_artifacts
 }

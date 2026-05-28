@@ -1,20 +1,13 @@
+#!/usr/bin/env bash
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-#!/usr/bin/env bash
-# Build PROVISION.iso (autounattend.xml + staged VirtIO drivers) for manual installs.
-# UEFI virt-install uses create-provision-drivers-iso.sh + inject-autounattend-into-windows-iso.sh instead.
+# VirtIO drivers only (no autounattend.xml). Used with boot.wim-injected install ISO so
+# legacy BIOS Setup does not read a GPT answer file from a second CD-ROM.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-AUTOUNATTEND="${1:-}"
-OUT="${OUT:-$ROOT/output/provision.iso}"
-
-if [[ -z "$AUTOUNATTEND" || ! -f "$AUTOUNATTEND" ]]; then
-  echo "Usage: $0 /path/to/autounattend.xml" >&2
-  echo "Render with: ./scripts/render-autounattend.sh > /tmp/autounattend.xml" >&2
-  exit 1
-fi
+OUT="${OUT:-$ROOT/output/provision-drivers.iso}"
 
 if [[ ! -f "$ROOT/drivers/viostor/2k22/amd64/viostor.sys" ]]; then
   echo "VirtIO drivers not staged. Run: make stage-virtio" >&2
@@ -29,8 +22,6 @@ fi
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-cp "$AUTOUNATTEND" "$WORKDIR/autounattend.xml"
-cp "$AUTOUNATTEND" "$WORKDIR/unattend.xml"
 cp -a "$ROOT/drivers/." "$WORKDIR/"
 
 mkdir -p "$(dirname "$OUT")"
@@ -40,4 +31,4 @@ xorriso -as mkisofs \
   -o "$OUT" \
   "$WORKDIR"
 
-echo "PROVISION ISO: $OUT"
+echo "PROVISION drivers ISO (no unattend): $OUT"

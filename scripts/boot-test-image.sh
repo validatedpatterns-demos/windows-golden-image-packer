@@ -9,13 +9,15 @@
 #
 # Environment (defaults shown):
 #   BOOT_TEST_CONNECT=qemu:///system
-#   BOOT_TEST_FIRMWARE=bios          # bios matches default Packer (efi_boot=false); use uefi for UEFI disks
+#   BOOT_TEST_FIRMWARE=uefi          # default: matches efi_boot in build.pkrvars.hcl (uefi for OpenShift)
 #   BOOT_TEST_MEMORY=8192
 #   BOOT_TEST_VCPUS=4
 #   BOOT_TEST_WAIT=120             # seconds VM must stay running before guest checks
 #   BOOT_TEST_GUEST_WAIT=600       # max seconds to wait for QEMU guest-agent IP
 #   BOOT_TEST_CHECK_GUEST=1        # 0 = only verify VM stays up; 1 = also require guest-agent address
 #   BOOT_TEST_GRAPHICS=vnc         # vnc or none
+#   BOOT_TEST_SHOW_CONSOLE=1       # 0 = do not launch virt-viewer
+#   BOOT_TEST_DISK_BUS=scsi        # UEFI default: virtio-scsi (OVMF does not boot virtio-blk)
 #   BOOT_TEST_KEEP_VM=0
 #   BOOT_TEST_KEEP_DISK=0
 #   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines   # overlay qcow2 directory (needs free space)
@@ -24,13 +26,27 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
+# shellcheck source=scripts/libvirt-vm-disk.sh
+source "$ROOT/scripts/libvirt-vm-disk.sh"
 
 CONNECT="${BOOT_TEST_CONNECT:-qemu:///system}"
-FIRMWARE="${BOOT_TEST_FIRMWARE:-bios}"
-WAIT="${BOOT_TEST_WAIT:-120}"
+
+default_firmware() {
+  local efi
+  efi="$("$ROOT/scripts/read-pkrvar.sh" efi_boot "$VAR_FILE" true)"
+  if [[ "$efi" == "true" ]]; then
+    echo uefi
+  else
+    echo bios
+  fi
+}
+
+FIRMWARE="${BOOT_TEST_FIRMWARE:-$(default_firmware)}"
+WAIT="${BOOT_TEST_WAIT:-180}"
 GUEST_WAIT="${BOOT_TEST_GUEST_WAIT:-600}"
 CHECK_GUEST="${BOOT_TEST_CHECK_GUEST:-1}"
 GRAPHICS="${BOOT_TEST_GRAPHICS:-vnc}"
+SHOW_CONSOLE="${BOOT_TEST_SHOW_CONSOLE:-1}"
 KEEP_VM="${BOOT_TEST_KEEP_VM:-0}"
 KEEP_DISK="${BOOT_TEST_KEEP_DISK:-0}"
 DRY_RUN="${BOOT_TEST_DRY_RUN:-0}"
@@ -57,6 +73,8 @@ usage() {
   echo "  --wait SECONDS     --guest-wait SECONDS"
   echo "  --no-guest-check   skip QEMU guest-agent IP check"
   echo "  --graphics vnc|none"
+  echo "  --no-console       do not open virt-viewer"
+  echo "  --disk-bus virtio|sata   root disk bus (default: virtio)"
   echo "  --keep-vm --keep-disk"
   echo "  --dry-run"
   exit "${1:-0}"
@@ -74,6 +92,8 @@ while [[ $# -gt 0 ]]; do
     --guest-wait) GUEST_WAIT="$2"; shift 2 ;;
     --no-guest-check) CHECK_GUEST=0; shift ;;
     --graphics) GRAPHICS="$2"; shift 2 ;;
+    --disk-bus) DISK_BUS="$2"; shift 2 ;;
+    --no-console) SHOW_CONSOLE=0; shift ;;
     --keep-vm) KEEP_VM=1; shift ;;
     --keep-disk) KEEP_DISK=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -116,6 +136,36 @@ case "$GRAPHICS" in
 esac
 
 IMAGE="$(readlink -f "$IMAGE")"
+
+if [[ -z "$DISK_BUS" ]]; then
+  if [[ "$FIRMWARE" == "uefi" ]]; then
+    DISK_BUS="${BOOT_TEST_DISK_BUS:-$(default_uefi_disk_bus)}"
+  else
+    DISK_BUS="${BOOT_TEST_DISK_BUS:-virtio}"
+  fi
+fi
+
+case "$DISK_BUS" in
+  scsi|sata|virtio) ;;
+  *)
+    echo "Invalid disk bus: $DISK_BUS (use scsi, sata, or virtio)" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$FIRMWARE" == "uefi" ]]; then
+  golden_image_has_efi_partition "$IMAGE"
+  efi_rc=$?
+  if [[ "$efi_rc" -eq 1 ]]; then
+    echo "ERROR: $IMAGE has no EFI system partition but boot-test uses UEFI." >&2
+    echo "Rebuild with efi_boot=true, or use --firmware bios for SeaBIOS images." >&2
+    "$ROOT/scripts/inspect-golden-qcow2.sh" "$IMAGE" >&2 || true
+    exit 1
+  elif [[ "$efi_rc" -eq 2 ]]; then
+    echo "WARN: could not inspect partitions (install libguestfs-tools for preflight checks)" >&2
+  fi
+fi
+
 if [[ "$IMAGE" == *-install.qcow2 ]]; then
   echo "Refusing to boot-test an install-only image: $IMAGE" >&2
   echo "Use the finalized golden image (windows-server-*-standard.qcow2)." >&2
@@ -139,8 +189,7 @@ cleanup() {
   local rc=$?
   if [[ "$KEEP_VM" != 1 && -n "$VM_NAME" ]]; then
     virsh --connect "$CONNECT" destroy "$VM_NAME" 2>/dev/null || true
-    virsh --connect "$CONNECT" undefine "$VM_NAME" --remove-all-storage 2>/dev/null \
-      || virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
+    virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
   fi
   if [[ "$KEEP_DISK" != 1 && -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
@@ -254,8 +303,7 @@ fi
 if virsh --connect "$CONNECT" dominfo "$VM_NAME" &>/dev/null; then
   echo "Removing existing domain $VM_NAME" >&2
   virsh --connect "$CONNECT" destroy "$VM_NAME" 2>/dev/null || true
-  virsh --connect "$CONNECT" undefine "$VM_NAME" --remove-all-storage 2>/dev/null \
-    || virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
+  virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
 fi
 
 GRAPHICS_ARGS=(--graphics vnc,listen=127.0.0.1)
@@ -263,12 +311,25 @@ GRAPHICS_ARGS=(--graphics vnc,listen=127.0.0.1)
 
 MACHINE="pc"
 BOOT_ARGS=(--boot hd)
+TPM_ARGS=()
 if [[ "$FIRMWARE" == "uefi" ]]; then
   MACHINE="q35"
-  BOOT_ARGS=(--boot uefi)
+  BOOT_ARGS=()
+  libvirt_uefi_import_boot_args "$VAR_FILE" "$ROOT" || exit 1
+  if [[ "${BOOT_TEST_TPM:-1}" == 1 ]]; then
+    if pkrvar_vtpm_enabled "$VAR_FILE" "$ROOT"; then
+      mapfile -t TPM_ARGS < <(libvirt_tpm_args "$VAR_FILE" "$ROOT" 1)
+    fi
+  fi
 fi
 
-echo "Starting VM (import, virtio root disk)..." >&2
+libvirt_disk_args "$TEST_DISK" "$DISK_BUS" "" 1
+
+echo "Starting VM (import, ${DISK_BUS} root disk, firmware=${FIRMWARE})..." >&2
+if [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" == "virtio" ]]; then
+  echo "WARN: virtio-blk often fails under OVMF (no bootable device). Prefer BOOT_TEST_DISK_BUS=scsi." >&2
+fi
+
 virt-install --connect "$CONNECT" \
   --name "$VM_NAME" \
   --memory "$MEMORY" \
@@ -278,7 +339,10 @@ virt-install --connect "$CONNECT" \
   --osinfo win2k22 \
   --import \
   "${BOOT_ARGS[@]}" \
-  --disk "path=${TEST_DISK},bus=virtio,format=qcow2,cache=writeback" \
+  "${LIBVIRT_UEFI_VIRT_INSTALL_ARGS[@]}" \
+  "${TPM_ARGS[@]}" \
+  "${DISK_CONTROLLER_ARGS[@]}" \
+  "${DISK_DEVICE_ARG[@]}" \
   --network "network=default,model=virtio" \
   "${GRAPHICS_ARGS[@]}" \
   --noautoconsole
@@ -295,20 +359,17 @@ done
 
 if [[ "$running" != 1 ]]; then
   echo "FAIL: VM did not reach running state" >&2
+  if [[ "$FIRMWARE" == "uefi" ]]; then
+    echo "Hint: OVMF 'no bootable device' -> use BOOT_TEST_DISK_BUS=sata (default) not virtio; rebuild with current sysprep unattend." >&2
+  fi
   exit 1
 fi
 
 echo "VM is running." >&2
-if [[ "$GRAPHICS" == vnc ]]; then
-  vnc="$(virsh --connect "$CONNECT" vncdisplay "$VM_NAME" 2>/dev/null || true)"
-  if [[ -n "$vnc" && "$vnc" != "none" ]]; then
-    if [[ "$vnc" == 127.0.0.1:* ]]; then
-      port="${vnc##*:}"
-      echo "VNC: virt-viewer --connect $CONNECT $VM_NAME  |  vncviewer 127.0.0.1:$((5900 + port))" >&2
-    else
-      echo "VNC: virt-viewer --connect $CONNECT $VM_NAME  (display $vnc)" >&2
-    fi
-  fi
+if [[ "$GRAPHICS" == vnc && "$SHOW_CONSOLE" == 1 ]]; then
+  "$ROOT/scripts/open-vm-console.sh" --background "$CONNECT" "$VM_NAME" || true
+elif [[ "$GRAPHICS" == vnc ]]; then
+  echo "Console: virt-viewer --connect $CONNECT $VM_NAME  (or set BOOT_TEST_SHOW_CONSOLE=1)" >&2
 fi
 
 echo "Waiting ${WAIT}s to confirm the guest stays up..." >&2
@@ -317,6 +378,8 @@ sleep "$WAIT"
 state="$(virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true)"
 if [[ "$state" != "running" ]]; then
   echo "FAIL: VM is not running after ${WAIT}s (state=${state:-unknown})" >&2
+  echo "Hint: first boot after sysprep may reboot during OOBE; try BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900" >&2
+  virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true
   exit 1
 fi
 

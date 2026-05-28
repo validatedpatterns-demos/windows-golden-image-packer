@@ -7,6 +7,31 @@
 
 Disk shrinking and qcow2 optimization do **not** change the guest boot path; they only affect file size on disk.
 
+## "No bootable device" (OVMF / UEFI)
+
+On most **Fedora/libvirt OVMF** builds, firmware **does not boot virtio-blk** (`disk.bus: virtio`). You get **no bootable device** even with a healthy image.
+
+| Mistake | Result |
+|---------|--------|
+| SeaBIOS (MBR) image in a **UEFI** VM | OVMF: no bootable device |
+| **`bus: virtio`** (virtio-blk) under OVMF | OVMF never sees a bootable ESP |
+| UEFI image tested with **`BOOT_TEST_DISK_BUS=virtio`** | Same as above — use **`scsi`** |
+
+**Current `efi_boot = true` builds**:
+
+1. Install Windows on **SATA** (virt-install + WinPE).
+2. Provision on **SATA**, install **vioscsi/viostor** boot-start drivers, run **`07-repair-uefi-boot.ps1`**.
+3. Boot-test and OpenShift use **`disk.bus: scsi`** (virtio-scsi), not virtio-blk.
+
+Inspect an image:
+
+```bash
+./scripts/inspect-golden-qcow2.sh output/windows-server-2025-standard.qcow2
+make boot-test-2025   # uses UEFI + scsi by default
+```
+
+**Rebuild** after changing this; old qcow2 files will not self-heal.
+
 ## Two common causes
 
 ### 1. VirtIO storage not loaded at boot (most common with `bus: virtio`)
@@ -54,7 +79,7 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: virtio
+                bus: scsi
 ```
 
 Prefer **UEFI install** for new images rather than running production Windows VMs with BIOS firmware.
@@ -107,7 +132,7 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: virtio
+                bus: scsi
           interfaces:
             - name: default
               masquerade: {}

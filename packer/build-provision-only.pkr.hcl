@@ -21,6 +21,11 @@ source "qemu" "from_install" {
   machine_type     = local.install_machine_type
   cpu_model        = "host"
 
+  efi_boot          = var.efi_boot
+  efi_firmware_code = var.efi_boot ? var.ovmf_code_path : ""
+  efi_firmware_vars = var.efi_boot ? var.ovmf_vars_path : ""
+  vtpm              = local.use_vtpm
+
   cd_label   = "PROVISION"
   cd_files   = local.provision_cd_files
 
@@ -45,8 +50,18 @@ build {
   }
 
   provisioner "file" {
-    content     = local.sysprep_unattend
-    destination = "C:/Windows/Panther/unattend.xml"
+    content     = local.sysprep_generalize_unattend
+    destination = "C:/Windows/Temp/sysprep-generalize.xml"
+  }
+
+  provisioner "file" {
+    content     = local.sysprep_oobe_unattend
+    destination = "C:/Windows/Temp/sysprep-oobe.xml"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../http/oobe-info-defaults.xml"
+    destination = "C:/Windows/Temp/oobe-info-defaults.xml"
   }
 
   provisioner "file" {
@@ -58,13 +73,17 @@ build {
     environment_vars = [
       "WINRM_PASSWORD=${var.admin_password}",
       "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
+      "WINDOWS_ISO_PATH=${local.windows_iso_path}",
     ]
     scripts = [
+      "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
       "${path.root}/../scripts/01-install-virtio-drivers.ps1",
       "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
       "${path.root}/../scripts/03-configure-openssh.ps1",
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
+      "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
     ]
   }

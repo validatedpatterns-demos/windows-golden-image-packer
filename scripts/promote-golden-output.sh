@@ -43,6 +43,9 @@ for src in "${matches[@]}"; do
   fi
   mv -f "$src" "$dest"
   echo "Golden image: $dest"
+  if [[ -x "$ROOT/scripts/inspect-golden-unattend.sh" ]]; then
+    "$ROOT/scripts/inspect-golden-unattend.sh" "$dest"
+  fi
 done
 
 rm -rf "$STAGING_DIR"

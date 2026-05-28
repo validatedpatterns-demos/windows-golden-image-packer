@@ -7,3 +7,4 @@ windows_iso_path_2025 = "./ci-stub.iso"
 virtio_win_iso_path   = "./ci-stub.iso"
 base_image_path       = "./ci-stub.qcow2"
 admin_password        = "ci-validate-only"
+headless              = true
