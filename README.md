@@ -200,7 +200,7 @@ example.pkrvars.hcl
 
 - **Post-processor: No qcow2 found in ./output**: the QEMU builder writes `output_directory/<vm_name>` **without** a `.qcow2` suffix (e.g. `packer-win2022-standard`). The post-processor now finds that file and renames it to `windows-server-*-*.qcow2`. If a long build already finished, recover with: `mv packer/output/packer-win2022-standard output/windows-server-2022-standard.qcow2` (adjust names/paths). Use `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
-- **Interrupted or failed build**: `make clean` sends SIGTERM/SIGKILL to `qemu-system` processes whose command line includes `packer-win`, then deletes `output/`, Packer cache dirs, and partial qcow2 files. Use `make clean-force` if cleanup should continue even when a VM process could not be killed.
+- **Interrupted or failed build**: Packer default `-on-error=cleanup` deletes its `output_directory` on Ctrl+C. This project uses **`PACKER_ON_ERROR=abort`** (Makefile default) and writes Packer artifacts under **`output/.packer-*/work/`** so the **install qcow2** in the staging root is kept. Retry provision with `SKIP_INSTALL=1 make build-version VERSION=2022` or `make build-provision-only BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2`. Use **`make clean`** when you want to wipe all artifacts.
 
 - **`stage-virtio` permission denied**: virtio-win ISO directories are often mode `555`. The script no longer `rm -rf`s them; it skips if drivers are already present, or `mv`s the old tree to `extras/virtio-win-staged.orphan.*` on refresh. If `mv` fails: `sudo chown -R $(whoami): extras/virtio-win-staged && chmod -R u+rwX extras/virtio-win-staged`.
 

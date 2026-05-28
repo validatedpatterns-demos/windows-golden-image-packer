@@ -20,9 +20,12 @@ PACKER_ONLY_GOLDEN     := -only=windows-golden-image.qemu.windows
 PACKER_ONLY_INSTALL    := -only=windows-install-only.qemu.install
 PACKER_ONLY_PROVISION  := -only=windows-golden-provision-only.qemu.from_install
 
-# Packer deletes output_directory at the start of each build. Per-version staging
-# prevents "make build" (2022 then 2025) from removing the previous qcow2.
+# Packer deletes output_directory at the start of each build (-force) and on failure/cancel
+# (default -on-error=cleanup). Per-version staging keeps install media separate from packer work/.
 PACKER_STAGING         = .packer-$(VERSION)
+PACKER_WORK_SUBDIR     = work
+# abort: keep VM/qcow2 on Ctrl+C or provision failure (retry with build-provision-only). cleanup: Packer default.
+PACKER_ON_ERROR       ?= abort
 
 .PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image clean clean-force
 
@@ -49,6 +52,8 @@ help:
 	@echo "  build-push      make build then push-quay (all images found)"
 	@echo "  clean           Kill Packer QEMU + libvirt build/boot-test VMs; remove artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
+	@echo ""
+	@echo "  PACKER_ON_ERROR=abort (default) keeps qcow2 on Ctrl+C; use make clean to wipe output/"
 
 init:
 	cd $(PACKER_DIR) && packer init .
@@ -89,13 +94,13 @@ build-version:
 # SeaBIOS single-pass Packer build (efi_boot=false only)
 build-version-bios:
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025" >&2; exit 1)
-	rm -rf "output/$(PACKER_STAGING)" "packer/output/$(PACKER_STAGING)" 2>/dev/null || true
+	mkdir -p "output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR)"
 	rm -f output/windows-server-$(VERSION)-*.qcow2 packer/output/windows-server-$(VERSION)-*.qcow2 \
 		packer/output/packer-win$(VERSION)-* 2>/dev/null || true
-	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var efi_boot=false \
-		-var output_directory=../output/$(PACKER_STAGING) \
+		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
 		$(PACKER_ONLY_GOLDEN) .
 	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
@@ -103,20 +108,24 @@ build-version-bios:
 build-version-uefi:
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025" >&2; exit 1)
 	@command -v virt-install >/dev/null || (echo "virt-install required for efi_boot=true (dnf install virt-install)" >&2; exit 1)
-	rm -rf "output/$(PACKER_STAGING)" "packer/output/$(PACKER_STAGING)" 2>/dev/null || true
+	mkdir -p "output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR)"
 	rm -f output/windows-server-$(VERSION)-*.qcow2 packer/output/windows-server-$(VERSION)-*.qcow2 2>/dev/null || true
-	VERSION=$(VERSION) WINDOWS_EDITION=$(WINDOWS_EDITION) PACKER_STAGING=$(PACKER_STAGING) \
-		./scripts/build-uefi-virt-install.sh
 	@edition_lc="$$(echo '$(WINDOWS_EDITION)' | tr '[:upper:]' '[:lower:]')"; \
 	install="output/$(PACKER_STAGING)/packer-win$(VERSION)-$$edition_lc-install.qcow2"; \
+	if [ "$(SKIP_INSTALL)" = "1" ] && [ -f "$$install" ]; then \
+	  echo "SKIP_INSTALL=1: reusing $$install"; \
+	else \
+	  VERSION=$(VERSION) WINDOWS_EDITION=$(WINDOWS_EDITION) PACKER_STAGING=$(PACKER_STAGING) \
+		./scripts/build-uefi-virt-install.sh; \
+	fi; \
 	test -f "$$install" || install="output/$(PACKER_STAGING)/packer-win$(VERSION)-$$edition_lc-install"; \
 	test -f "$$install" || (echo "UEFI install disk not found under output/$(PACKER_STAGING)" >&2; exit 1); \
-	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var efi_boot=true \
 		-var install_disk_interface=sata \
 		-var base_image_path=../$$install \
-		-var output_directory=../output/$(PACKER_STAGING) \
+		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
 		$(PACKER_ONLY_PROVISION) .
 	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
@@ -124,17 +133,21 @@ build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
 	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true
-	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		$(PACKER_ONLY_INSTALL) .
 
 build-provision-only: stage-virtio init
 	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=output/...-install.qcow2 from make build-install" >&2; exit 1)
 	@test -f "$(abspath $(BASE_IMAGE))" || (echo "BASE_IMAGE not found: $(BASE_IMAGE)" >&2; exit 1)
-	@efi="$$(./scripts/read-pkrvar.sh efi_boot $(VAR_FILE) true)"; \
-	cd $(PACKER_DIR) && packer build -force $(VAR_FILE_FLAG) \
+	@staging_dir="$$(dirname "$(abspath $(BASE_IMAGE))")"; \
+	work_dir="$$staging_dir/work"; \
+	mkdir -p "$$work_dir"; \
+	efi="$$(./scripts/read-pkrvar.sh efi_boot $(VAR_FILE) true)"; \
+	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var base_image_path=$(abspath $(BASE_IMAGE)) \
 		-var efi_boot=$$efi \
+		-var output_directory=$$work_dir \
 		$(PACKER_ONLY_PROVISION) .
 
 build-2022: stage-virtio init

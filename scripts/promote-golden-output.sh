@@ -1,9 +1,9 @@
+#!/usr/bin/env bash
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-#!/usr/bin/env bash
 # Move finalized golden qcow2 from a per-version Packer staging dir to output/.
-# Packer removes output_directory on each build; staging avoids deleting other versions.
+# Install qcow2 and helper ISOs live in the staging root; Packer writes to staging/work/.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -27,11 +27,14 @@ fi
 
 shopt -s nullglob
 matches=("$STAGING_DIR"/windows-server-"${VERSION}"-*.qcow2)
+if ((${#matches[@]} == 0)); then
+  matches=("$STAGING_DIR"/work/windows-server-"${VERSION}"-*.qcow2)
+fi
 shopt -u nullglob
 
 if ((${#matches[@]} == 0)); then
-  echo "No windows-server-${VERSION}-*.qcow2 under $STAGING_DIR" >&2
-  ls -la "$STAGING_DIR" >&2 || true
+  echo "No windows-server-${VERSION}-*.qcow2 under $STAGING_DIR (or $STAGING_DIR/work)" >&2
+  ls -la "$STAGING_DIR" "$STAGING_DIR/work" 2>/dev/null || ls -la "$STAGING_DIR" >&2 || true
   exit 1
 fi
 
@@ -48,4 +51,5 @@ for src in "${matches[@]}"; do
   fi
 done
 
-rm -rf "$STAGING_DIR"
+# Drop Packer work dir only; install qcow2 and ISOs remain until make clean.
+rm -rf "$STAGING_DIR/work"
