@@ -110,6 +110,7 @@ ${specialize_winrm_xml}
         </Password>
         <Enabled>true</Enabled>
         <Username>Administrator</Username>
+        <LogonCount>1</LogonCount>
       </AutoLogon>
       <FirstLogonCommands>
 ${firstlogon_commands_xml}

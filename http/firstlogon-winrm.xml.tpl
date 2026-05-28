@@ -15,6 +15,6 @@
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <Description>Disable autologon after first boot</Description>
-          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f</CommandLine>
+          <Description>Disable autologon after Packer install (Winlogon)</Description>
+          <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File A:\clear-autologon.ps1</CommandLine>
         </SynchronousCommand>

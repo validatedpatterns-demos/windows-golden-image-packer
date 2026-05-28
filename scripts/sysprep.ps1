@@ -4,6 +4,14 @@
 # Generalize the image for cloning in OpenShift Virtualization (KubeVirt).
 $ErrorActionPreference = 'Stop'
 
+$clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
+if (Test-Path $clearScript) {
+    & $clearScript
+}
+else {
+    Write-Warning "clear-autologon.ps1 not found beside sysprep.ps1; image may autologon on first OpenShift boot"
+}
+
 $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
 if (-not (Test-Path $sysprep)) {
     throw "Sysprep not found at $sysprep"
@@ -16,7 +24,8 @@ if (-not (Test-Path $unattend) -and (Test-Path $unattendAlt)) {
     Copy-Item -Path $unattendAlt -Destination $unattend -Force
 }
 
-$sysprepArgs = @('/generalize', '/oobe', '/quiet', '/shutdown')
+# /mode:vm — generalize for redeployment as a VM (virtio disk, different libvirt host, etc.)
+$sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', '/shutdown')
 if (Test-Path $unattend) {
     Write-Host "Running sysprep with unattend: $unattend"
     $sysprepArgs += "/unattend:$unattend"

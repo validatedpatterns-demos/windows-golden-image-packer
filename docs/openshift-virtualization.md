@@ -79,7 +79,7 @@ To publish the same disk to **Quay** as a container image (optional), see [quay-
 - **Disk bus**: VirtIO
 - **Network**: masquerade/bridge with **VirtIO** model
 - **QEMU guest agent**: enabled on the VM spec so node operations work
-- **First boot**: sysprep OOBE runs once (locale and Administrator password come from `http/sysprep-unattend.xml.tpl`); set hostname and license per your process
+- **First boot**: sysprep OOBE runs once (locale and Administrator password come from `http/sysprep-unattend.xml.tpl`); the VM should stop at the **Administrator sign-in** screen (autologon is cleared before sysprep and disabled in the sysprep answer file). Set hostname and license per your process.
 
 ```yaml
 spec:

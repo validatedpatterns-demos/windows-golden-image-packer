@@ -117,6 +117,7 @@ locals {
     "install-openssh-server.ps1"   = file("${path.root}/../scripts/install-openssh-server.ps1")
     "OpenSSH-Server-Common.ps1"    = file("${path.root}/../scripts/OpenSSH-Server-Common.ps1")
     "install-openssh-locator.cmd" = file("${path.root}/../http/install-openssh-locator.cmd")
+    "clear-autologon.ps1"         = file("${path.root}/../scripts/clear-autologon.ps1")
   }
 
   autounattend_floppy = var.efi_boot ? {} : local.winrm_floppy_files
