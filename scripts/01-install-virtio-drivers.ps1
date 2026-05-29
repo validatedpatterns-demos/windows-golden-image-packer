@@ -16,8 +16,25 @@ function Get-CdRomDriveLetters {
     return $letters | Select-Object -Unique
 }
 
+function Get-TargetVirtioOsDir {
+    switch ($env:WINDOWS_VERSION) {
+        '2025' { return '2k25' }
+        '2022' { return '2k22' }
+    }
+
+    $caption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
+    if ($caption -match '2025') {
+        return '2k25'
+    }
+
+    return '2k22'
+}
+
 function Get-DriverSearchPaths {
-    param([string]$DriveRoot)
+    param(
+        [string]$DriveRoot,
+        [string]$OsDir
+    )
 
     if (-not (Test-Path $DriveRoot)) {
         return @()
@@ -25,23 +42,18 @@ function Get-DriverSearchPaths {
 
     $paths = @()
     $components = @('viostor', 'NetKVM', 'Balloon', 'vioscsi', 'qxldod')
-    $subdirs = @('2k22', '2k25', 'w11', 'w10')
 
     foreach ($component in $components) {
-        foreach ($subdir in $subdirs) {
-            $path = Join-Path $DriveRoot "$component\$subdir\amd64"
-            if (Test-Path $path) { $paths += $path }
-        }
-    }
-
-    foreach ($subdir in $subdirs) {
-        $path = Join-Path $DriveRoot "$subdir\amd64"
+        $path = Join-Path $DriveRoot "$component\$OsDir\amd64"
         if (Test-Path $path) { $paths += $path }
     }
 
+    $flat = Join-Path $DriveRoot "$OsDir\amd64"
+    if (Test-Path $flat) { $paths += $flat }
+
     if (-not $paths) {
         Get-ChildItem -Path $DriveRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq 'amd64' } |
+            Where-Object { $_.FullName -match "\\$([regex]::Escape($OsDir))\\amd64$" } |
             ForEach-Object {
                 if (Get-ChildItem -Path $_.FullName -Filter '*.inf' -ErrorAction SilentlyContinue) {
                     $_.FullName
@@ -69,8 +81,10 @@ function Get-ProvisionSearchRoots {
 }
 
 function Find-VirtioMediaRoot {
+    param([string]$OsDir)
+
     foreach ($root in (Get-ProvisionSearchRoots)) {
-        if ((Get-DriverSearchPaths -DriveRoot $root).Count -gt 0) {
+        if ((Get-DriverSearchPaths -DriveRoot $root -OsDir $OsDir).Count -gt 0) {
             return $root
         }
     }
@@ -92,15 +106,16 @@ function Find-VirtioMediaRoot {
 }
 
 function Get-VirtioOsDir {
-    param([string]$MediaRoot)
+    param(
+        [string]$MediaRoot,
+        [string]$OsDir
+    )
 
-    foreach ($subdir in @('2k25', '2k22')) {
-        if (Test-Path (Join-Path $MediaRoot "viostor\$subdir\amd64\viostor.inf")) {
-            return $subdir
-        }
+    if (Test-Path (Join-Path $MediaRoot "viostor\$OsDir\amd64\viostor.inf")) {
+        return $OsDir
     }
 
-    throw "Could not find viostor.inf under $MediaRoot (expected viostor\2k22 or 2k25)."
+    throw "Could not find viostor.inf under $MediaRoot\viostor\$OsDir\amd64 (stage both 2k22 and 2k25 with make stage-virtio)."
 }
 
 function Install-DriverPackage {
@@ -175,9 +190,10 @@ function Confirm-BootDrivers {
     }
 }
 
-$mediaRoot = Find-VirtioMediaRoot
-$virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot
-$driverPaths = Get-DriverSearchPaths -DriveRoot $mediaRoot
+$virtioOsDir = Get-TargetVirtioOsDir
+$mediaRoot = Find-VirtioMediaRoot -OsDir $virtioOsDir
+$virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot -OsDir $virtioOsDir
+$driverPaths = Get-DriverSearchPaths -DriveRoot $mediaRoot -OsDir $virtioOsDir
 
 Write-Host "VirtIO media: $mediaRoot (OS dir: $virtioOsDir)"
 Write-Host 'Installing VirtIO drivers from paths:'

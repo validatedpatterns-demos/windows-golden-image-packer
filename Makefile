@@ -27,7 +27,7 @@ PACKER_WORK_SUBDIR     = work
 # abort: keep VM/qcow2 on Ctrl+C or provision failure (retry with build-provision-only). cleanup: Packer default.
 PACKER_ON_ERROR       ?= abort
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image clean clean-force
+.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
 
 help:
 	@echo "Targets:"
@@ -49,6 +49,7 @@ help:
 	@echo "  boot-test-2022  boot-test-2025   version-specific boot tests"
 	@echo "  boot-test-image IMAGE=path/to.qcow2   test one file"
 	@echo "  inspect-image IMAGE=path/to.qcow2     partition/firmware hints"
+	@echo "  extract-sysprep-log [IMAGE=...] [OUT_DIR=./golden-logs]  sysprep diagnostics from qcow2"
 	@echo "  build-push      make build then push-quay (all images found)"
 	@echo "  clean           Kill Packer QEMU + libvirt build/boot-test VMs; remove artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
@@ -214,6 +215,20 @@ boot-test-image:
 inspect-image:
 	@test -n "$(IMAGE)" || (echo "Set IMAGE=path/to/windows-server-*.qcow2" >&2; exit 1)
 	./scripts/inspect-golden-qcow2.sh "$(abspath $(IMAGE))"
+
+extract-sysprep-log:
+	@if [ -n "$(GOLDEN_QCOW2)" ]; then \
+	  img="$(abspath $(GOLDEN_QCOW2))"; \
+	elif [ -n "$(IMAGE)" ]; then \
+	  img="$(abspath $(IMAGE))"; \
+	else \
+	  img="$$(./scripts/find-golden-qcow2.sh)"; \
+	fi; \
+	echo "Using image: $$img" >&2; \
+	out="$${OUT_DIR:-./golden-logs}/sysprep-diagnostics.log"; \
+	rm -f "$$out"; \
+	./scripts/extract-sysprep-setuperr.sh "$$img" "$$out"; \
+	cat "$$out"
 
 clean:
 	./scripts/clean-build.sh

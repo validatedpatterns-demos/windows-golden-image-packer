@@ -1,10 +1,10 @@
+#!/usr/bin/env bash
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-#!/usr/bin/env bash
-# Find built golden qcow2 images under output/ or packer/output/.
+# Find built (or in-progress) golden qcow2 images under output/ or packer/output/.
 # Usage: find-golden-qcow2.sh          # print one image (newest), exit 1 if none
-#        find-golden-qcow2.sh --all    # print all windows-server-*.qcow2 (one per line)
+#        find-golden-qcow2.sh --all    # print all candidates (one per line)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,6 +14,10 @@ search_dirs=(
   "$ROOT/output"
   "$ROOT/packer/output"
 )
+
+while IFS= read -r dir; do
+  [[ -d "$dir" ]] && search_dirs+=("$dir")
+done < <(find "$ROOT/output" "$ROOT/packer/output" -type d \( -name work -o -name '.packer-*' \) 2>/dev/null | sort -u)
 
 collect_finalized() {
   local -a found=()
@@ -39,8 +43,13 @@ collect_packer_vm_names() {
   for dir in "${search_dirs[@]}"; do
     [[ -d "$dir" ]] || continue
     shopt -s nullglob
-    for f in "$dir"/packer-win*; do
-      [[ -f "$f" ]] && found+=("$f")
+    for f in "$dir"/packer-win* "$dir"/*.qcow2; do
+      [[ -f "$f" ]] || continue
+      case "$(basename "$f")" in
+        *-install*) continue ;;
+        windows-server-*.qcow2) found+=("$f") ;;
+        packer-win*) found+=("$f") ;;
+      esac
     done
     shopt -u nullglob
   done
@@ -54,8 +63,9 @@ collect_packer_vm_names() {
 mapfile -t images < <(collect_finalized || collect_packer_vm_names || true)
 
 if ((${#images[@]} == 0)); then
-  echo "No golden qcow2 found under output/ or packer/output/ (run make build first)" >&2
+  echo "No qcow2 found under output/ or packer/output/ (run make build first)" >&2
   echo "Checked: ${search_dirs[*]}" >&2
+  echo "Failed provision disks are usually output/.packer-*/work/packer-win*" >&2
   exit 1
 fi
 
@@ -64,7 +74,6 @@ if [[ "$ALL" == "--all" ]]; then
   exit 0
 fi
 
-# Default: newest file by mtime (single build / push-quay with GOLDEN_QCOW2 unset)
 newest="${images[0]}"
 for f in "${images[@]}"; do
   if [[ "$f" -nt "$newest" ]]; then

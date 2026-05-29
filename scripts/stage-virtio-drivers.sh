@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 #!/usr/bin/env bash
-# Extract VirtIO drivers from virtio-win.iso into drivers/ (WinPE + provision CD; keep 2k22/2k25 amd64 only).
+# Extract VirtIO drivers from virtio-win.iso into drivers/ (WinPE + provision CD).
+# Always stage both 2k22 and 2k25: one shared drivers/ tree supports sequential 2022 + 2025 builds.
+# Each Packer run installs only the matching OS dir (see packer/locals.pkr.hcl virtio_os_dir).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -91,6 +91,7 @@ build {
       "WINRM_PASSWORD=${var.admin_password}",
       "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
       "WINDOWS_ISO_PATH=${local.windows_iso_path}",
+      "WINDOWS_VERSION=${var.windows_version}",
     ]
     scripts = [
       "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
@@ -102,7 +103,12 @@ build {
       "${path.root}/../scripts/configure-oobe-locale.ps1",
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
+      "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
     ]
+  }
+
+  provisioner "windows-restart" {
+    restart_timeout = "30m"
   }
 
   post-processor "shell-local" {
