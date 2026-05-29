@@ -122,12 +122,23 @@ variable "disk_size" {
 
 variable "install_disk_interface" {
   type        = string
-  description = "Disk bus during Windows Setup (phase 1). Use ide so WinPE can partition without VirtIO drivers; virtio is installed in phase 2 (WinRM)."
+  description = "Disk bus during Windows Setup (virt-install / Packer install). Use sata for virt-install UEFI path or ide for Packer SeaBIOS install. Not used for the Packer provision pass (see provision_disk_interface)."
   default     = "ide"
 
   validation {
     condition     = contains(["ide", "sata", "virtio", "virtio-scsi"], var.install_disk_interface)
     error_message = "The install_disk_interface variable must be ide, sata, virtio, or virtio-scsi."
+  }
+}
+
+variable "provision_disk_interface" {
+  type        = string
+  description = "Disk bus for the Packer QEMU provision pass (build-provision-only). Must be ide: the Packer QEMU plugin uses -drive if=sata which QEMU q35 rejects. virtio-scsi is installed during provision for OpenShift runtime."
+  default     = "ide"
+
+  validation {
+    condition     = contains(["ide", "virtio-scsi"], var.provision_disk_interface)
+    error_message = "The provision_disk_interface variable must be ide or virtio-scsi."
   }
 }
 

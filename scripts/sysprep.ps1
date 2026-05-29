@@ -80,9 +80,26 @@ function Write-SysprepDiagnosticLogs {
     }
 }
 
-function Invoke-GuestShutdown {
-    Write-Host 'Scheduling guest shutdown so Packer does not wait on shutdown_timeout'
-    Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/s', '/t', '15', '/f') -NoNewWindow
+function Repair-UefiBootIfNeeded {
+    $esp = Get-Partition -ErrorAction SilentlyContinue |
+        Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
+        Select-Object -First 1
+    if (-not $esp) {
+        return
+    }
+
+    $letter = (Get-Volume -Partition $esp -ErrorAction SilentlyContinue).DriveLetter
+    if (-not $letter) {
+        Write-Warning 'ESP has no drive letter; skipping pre-sysprep bcdboot (07-repair-uefi-boot.ps1 should have run after mbr2gpt).'
+        return
+    }
+
+    $efiRoot = "$letter`:\"
+    Write-Host "Refreshing UEFI boot store before sysprep: bcdboot $env:SystemRoot /s $efiRoot /f UEFI"
+    & bcdboot.exe $env:SystemRoot /s $efiRoot /f UEFI | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "bcdboot before sysprep failed with exit code $LASTEXITCODE"
+    }
 }
 
 try {
@@ -93,6 +110,8 @@ try {
     else {
         Write-Warning "clear-autologon.ps1 not found beside sysprep.ps1; image may autologon on first OpenShift boot"
     }
+
+    & (Join-Path $PSScriptRoot 'verify-uefi-boot.ps1')
 
     $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
     if (-not (Test-Path $sysprep)) {
@@ -147,6 +166,8 @@ try {
         }
     }
 
+    Repair-UefiBootIfNeeded
+
     $unattend = $generalizeUnattend
     $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/shutdown', "/unattend:$unattend")
     Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
@@ -161,18 +182,15 @@ try {
         Write-Host "sysprep.exe exited with code $codeLabel"
         Save-SysprepDiagnostics "sysprep exit $codeLabel"
         Write-SysprepDiagnosticLogs
-        Invoke-GuestShutdown
         throw "sysprep.exe failed (exit $codeLabel). Diagnostics saved to $diagLog; extract with: make extract-sysprep-log IMAGE=<qcow2>"
     }
 
-    Write-Host 'sysprep.exe completed; waiting for /shutdown to power off the VM'
-    Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/s', '/t', '120', '/f') -NoNewWindow
+    Write-Host 'sysprep.exe completed with /shutdown; waiting for guest power-off (do not schedule a second shutdown)'
 }
 catch {
     if (-not (Test-Path $diagLog)) {
         Save-SysprepDiagnostics $_.Exception.Message
         Write-SysprepDiagnosticLogs
     }
-    Invoke-GuestShutdown
     throw
 }

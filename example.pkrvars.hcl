@@ -18,8 +18,7 @@ windows_iso_path_2025 = "/path/to/windows-server-2025.iso"
 
 virtio_win_iso_path = "/path/to/virtio-win.iso"
 
-# UEFI builds: install/provision on SATA (WinPE/OVMF). Runtime boot uses virtio-scsi (disk bus scsi on the VM).
-# SeaBIOS dev builds: ide. Do not use virtio-blk alone under OVMF — it shows "no bootable device".
+# virt-install install disk (libvirt SATA/AHCI). Packer provision uses provision_disk_interface (ide).
 install_disk_interface = "sata"
 install_net_device     = "e1000"
 

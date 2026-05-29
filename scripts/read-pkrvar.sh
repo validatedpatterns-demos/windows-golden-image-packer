@@ -16,8 +16,11 @@ if [[ ! -f "$FILE" ]]; then
   exit 0
 fi
 
-VAL="$(grep -E "^[[:space:]]*${KEY}[[:space:]]*=" "$FILE" | tail -1 \
-  | sed -E 's/#.*$//; s/^[[:space:]]*[^=]+=[[:space:]]*"([^"]*)".*/\1/; s/^[[:space:]]*[^=]+=[[:space:]]*([^[:space:]]+).*/\1/; s/[[:space:]]+$//')"
+VAL=""
+if grep -qE "^[[:space:]]*${KEY}[[:space:]]*=" "$FILE" 2>/dev/null; then
+  VAL="$(grep -E "^[[:space:]]*${KEY}[[:space:]]*=" "$FILE" | tail -1 \
+    | sed -E 's/#.*$//; s/^[[:space:]]*[^=]+=[[:space:]]*"([^"]*)".*/\1/; s/^[[:space:]]*[^=]+=[[:space:]]*([^[:space:]]+).*/\1/; s/[[:space:]]+$//')"
+fi
 
 if [[ -z "$VAL" ]]; then
   echo "$DEFAULT"

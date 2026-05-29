@@ -82,7 +82,7 @@ See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for imp
    make boot-test-2025
    ```
 
-Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO drivers; see [docs/install-phases.md](docs/install-phases.md) for the two-phase flow and optional split builds (`make build-install` / `make build-provision-only`).
+Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO drivers; see [docs/install-phases.md](docs/install-phases.md) for the two-phase flow and optional split builds (`make build-install` / `make build-provision-only`). If a long build fails, see [docs/recover-build.md](docs/recover-build.md) (`make recover-provision`).
 
 ## Image size and DataVolume sizing
 
@@ -200,7 +200,7 @@ example.pkrvars.hcl
 
 - **Post-processor: No qcow2 found in ./output**: the QEMU builder writes `output_directory/<vm_name>` **without** a `.qcow2` suffix (e.g. `packer-win2022-standard`). The post-processor now finds that file and renames it to `windows-server-*-*.qcow2`. If a long build already finished, recover with: `mv packer/output/packer-win2022-standard output/windows-server-2022-standard.qcow2` (adjust names/paths). Use `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
-- **Interrupted or failed build**: Packer default `-on-error=cleanup` deletes its `output_directory` on Ctrl+C. This project uses **`PACKER_ON_ERROR=abort`** (Makefile default) and writes Packer artifacts under **`output/.packer-*/work/`** so the **install qcow2** in the staging root is kept. Retry provision with `SKIP_INSTALL=1 make build-version VERSION=2022` or `make build-provision-only BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2`. Use **`make clean`** when you want to wipe all artifacts.
+- **Interrupted or failed build**: see **[docs/recover-build.md](docs/recover-build.md)**. Quick: `make recover-provision VERSION=2022` then `EXECUTE=1 make recover-provision VERSION=2022`. Packer keeps disks under `output/.packer-*/` when `PACKER_ON_ERROR=abort` (Makefile default). **Do not** set `BASE_IMAGE` to a file under `work/` — Packer `-force` deletes it. After `mbr2gpt`, recover from the **work** disk (GPT), not the `-install` image (MBR).
 
 - **`stage-virtio` permission denied**: virtio-win ISO directories are often mode `555`. The script no longer `rm -rf`s them; it skips if drivers are already present, or `mv`s the old tree to `extras/virtio-win-staged.orphan.*` on refresh. If `mv` fails: `sudo chown -R $(whoami): extras/virtio-win-staged && chmod -R u+rwX extras/virtio-win-staged`.
 
@@ -220,6 +220,7 @@ example.pkrvars.hcl
 - **Invalid autounattend for pass [specialize]**: WinRM runs via `Microsoft-Windows-Deployment` / `RunSynchronous` / `Path` (not `CommandLine` under `Shell-Setup`). Invalid settings like `EnableFirewall` under `Microsoft-Windows-Setup` were removed. Run `make clean` so the floppy is regenerated.
 
 - **BdsDxe: No bootable option / DVD Time out**: OVMF cannot start the Microsoft ISO UEFI loader on many Fedora/QEMU 10 hosts. Use default **`install_firmware = "seabios"`** (see `example.pkrvars.hcl`); install uses SeaBIOS, Packer runs **`mbr2gpt`**. See [docs/uefi-install.md](docs/uefi-install.md).
+- **SeaBIOS boot prompt after `mbr2gpt` / restart during provision**: the disk is GPT but Packer rebooted with SeaBIOS. Set **`efi_boot = true`** and recover from the **work** disk: `make recover-provision VERSION=2022` then `EXECUTE=1 make recover-provision VERSION=2022`. Do not use the `-install` qcow2. See [docs/recover-build.md](docs/recover-build.md).
 - **Windows cannot be installed to this disk … GPT partition style**: you booted **UEFI** while using the **MBR** answer file, or the opposite. Default **`install_firmware = "seabios"`** uses `autounattend-bios.xml.tpl`. Do not pick a UEFI DVD entry during a SeaBIOS install.
 - **Installer runs but asks for language/edition/disk (unattend ignored)**: for UEFI builds, confirm `wimlib-imagex` injected autounattend (`Install ISO with autounattend in boot.wim` in the log). For SeaBIOS (`efi_boot = false`), the floppy carries `autounattend.xml`. Run `make stage-virtio`. Check `%WINDIR%\Panther\setuperr.log` in the VM if a step fails.
 

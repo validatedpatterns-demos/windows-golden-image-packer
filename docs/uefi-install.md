@@ -68,8 +68,11 @@ Manual single-version install only:
 ```bash
 make stage-virtio
 VERSION=2025 ./scripts/build-uefi-virt-install.sh
-make build-provision-only VERSION=2025 BASE_IMAGE=output/.packer-2025/packer-win2025-standard-install.qcow2
+make build-provision-only VERSION=2025 \
+  BASE_IMAGE=output/.packer-2025/packer-win2025-standard-install.qcow2
 ```
+
+If provision fails, see [recover-build.md](recover-build.md).
 
 ## SeaBIOS build (`efi_boot = false`, dev only)
 

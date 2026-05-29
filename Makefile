@@ -27,7 +27,7 @@ PACKER_WORK_SUBDIR     = work
 # abort: keep VM/qcow2 on Ctrl+C or provision failure (retry with build-provision-only). cleanup: Packer default.
 PACKER_ON_ERROR       ?= abort
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
+.PHONY: help init validate build build-versions build-version build-install build-provision-only recover-provision build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
 
 help:
 	@echo "Targets:"
@@ -36,7 +36,8 @@ help:
 	@echo "  build                  Build $(BUILD_VERSIONS) sequentially (install + provision + sysprep)"
 	@echo "  build-version          Build one version: make build-version VERSION=2025"
 	@echo "  build-install          Pass 1 only: make build-install VERSION=2025"
-	@echo "  build-provision-only   Pass 2 only: BASE_IMAGE=path/to-install.qcow2"
+	@echo "  build-provision-only   Pass 2 only: BASE_IMAGE=path/to.qcow2 (not under work/)"
+	@echo "  recover-provision      Diagnose failed build; EXECUTE=1 retries provision safely"
 	@echo "  build-2022             Build Windows Server 2022 only"
 	@echo "  build-2025             Build Windows Server 2025 only"
 	@echo "  download-virtio Download virtio-win ISO and stage drivers for the config CD"
@@ -124,7 +125,6 @@ build-version-uefi:
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var efi_boot=true \
-		-var install_disk_interface=sata \
 		-var base_image_path=../$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
 		$(PACKER_ONLY_PROVISION) .
@@ -139,17 +139,32 @@ build-install: stage-virtio init
 		$(PACKER_ONLY_INSTALL) .
 
 build-provision-only: stage-virtio init
-	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=output/...-install.qcow2 from make build-install" >&2; exit 1)
+	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=path/to.qcow2 (install image or recovery/salvage copy; not under work/)" >&2; exit 1)
 	@test -f "$(abspath $(BASE_IMAGE))" || (echo "BASE_IMAGE not found: $(BASE_IMAGE)" >&2; exit 1)
-	@staging_dir="$$(dirname "$(abspath $(BASE_IMAGE))")"; \
+	@base="$(abspath $(BASE_IMAGE))"; \
+	case "$$base" in \
+	  */work/*) \
+	    echo "ERROR: BASE_IMAGE must not be under work/ — packer -force deletes that directory." >&2; \
+	    echo "Run: make recover-provision VERSION=2022 --execute" >&2; \
+	    exit 1 ;; \
+	esac; \
+	staging_dir="$$(dirname "$$base")"; \
 	work_dir="$$staging_dir/work"; \
 	mkdir -p "$$work_dir"; \
 	efi="$$(./scripts/read-pkrvar.sh efi_boot $(VAR_FILE) true)"; \
+	version="$(VERSION)"; \
+	if [ -z "$$version" ]; then \
+	  version="$$(echo "$$base" | sed -n 's|.*/\.packer-\([0-9][0-9][0-9][0-9]\)/.*|\1|p')"; \
+	fi; \
+	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir -var efi_boot=$$efi"; \
+	if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
-		-var base_image_path=$(abspath $(BASE_IMAGE)) \
-		-var efi_boot=$$efi \
-		-var output_directory=$$work_dir \
+		-var windows_edition=$(WINDOWS_EDITION) \
+		$$prov_args \
 		$(PACKER_ONLY_PROVISION) .
+
+recover-provision: stage-virtio init
+	./scripts/recover-provision.sh $(if $(EXECUTE),--execute,)
 
 build-2022: stage-virtio init
 	$(MAKE) build-version VERSION=2022

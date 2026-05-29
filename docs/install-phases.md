@@ -24,6 +24,8 @@ The finished **qcow2** can boot on OpenShift with **`disk.bus: virtio`** after p
 
 Use this if install succeeds but provisioning fails (or you want to retry phase 2 without reinstalling Windows).
 
+**Recovery after a long failed build:** see **[recover-build.md](recover-build.md)** (`make recover-provision`).
+
 **Important:** use `-only` so only one build runs, but still pass the directory `.` so variables and locals load:
 
 ```bash
@@ -46,10 +48,13 @@ Output: `output/windows-server-<version>-<edition>-install.qcow2`
 ### Pass 2 – provision + sysprep
 
 ```bash
-make build-provision-only BASE_IMAGE=output/windows-server-2022-standard-install.qcow2
+make build-provision-only VERSION=2022 \
+  BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2
 ```
 
 Output: `output/windows-server-<version>-<edition>.qcow2`
+
+If provision failed mid-way (especially after `mbr2gpt`), use `make recover-provision` instead — see [recover-build.md](recover-build.md).
 
 ## Advanced: VirtIO disk during Setup
 

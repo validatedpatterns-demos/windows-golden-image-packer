@@ -86,6 +86,7 @@ build {
     source      = "${path.root}/../drivers"
   }
 
+  # SeaBIOS dev build only (make build-version-bios). UEFI/mbr2gpt is in build-provision-only.pkr.hcl.
   provisioner "powershell" {
     environment_vars = [
       "WINRM_PASSWORD=${var.admin_password}",
@@ -94,7 +95,6 @@ build {
       "WINDOWS_VERSION=${var.windows_version}",
     ]
     scripts = [
-      "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
       "${path.root}/../scripts/01-install-virtio-drivers.ps1",
       "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
       "${path.root}/../scripts/03-configure-openssh.ps1",

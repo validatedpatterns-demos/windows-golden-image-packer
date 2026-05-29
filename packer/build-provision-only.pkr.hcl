@@ -3,8 +3,9 @@
 
 # Optional pass 2: boot an existing qcow2 (after a failed or partial build) and run provisioners + sysprep only.
 # Usage:
-#   make build-install          # stops before sysprep; writes output/*-install.qcow2
-#   make build-provision-only BASE_IMAGE=output/windows-server-2022-standard-install.qcow2
+#   make recover-provision VERSION=2022              # diagnose
+#   EXECUTE=1 make recover-provision VERSION=2022  # safe retry
+#   make build-provision-only VERSION=2022 BASE_IMAGE=output/.packer-2022/recovery/salvage.qcow2
 
 source "qemu" "from_install" {
   vm_name          = "${local.vm_name}-provision"
@@ -16,7 +17,10 @@ source "qemu" "from_install" {
   disk_image       = true
   iso_url          = var.base_image_path # qcow2 from make build-install
   iso_checksum     = "none"
-  disk_interface   = var.install_disk_interface
+  # Existing install/salvage images already have the correct virtual size; resizing
+  # (especially 60G decimal vs 60 GiB) makes qemu-img require --shrink and abort.
+  skip_resize_disk = true
+  disk_interface   = var.provision_disk_interface
   net_device       = var.install_net_device
   machine_type     = local.install_machine_type
   cpu_model        = "host"
@@ -28,6 +32,14 @@ source "qemu" "from_install" {
 
   cd_label   = "PROVISION"
   cd_files   = local.provision_cd_files
+
+  # Prefer the converted GPT/UEFI system disk over any CD after mbr2gpt.
+  qemuargs = var.efi_boot ? [
+    ["-boot", "order=c"],
+    ["-device", "qemu-xhci"],
+  ] : [
+    ["-device", "qemu-xhci"],
+  ]
 
   communicator   = "winrm"
   winrm_username = var.winrm_username
@@ -78,13 +90,29 @@ build {
     ]
     scripts = [
       "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
+      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
+    ]
+  }
+
+  provisioner "windows-restart" {
+    restart_timeout = "30m"
+  }
+
+  provisioner "powershell" {
+    environment_vars = [
+      "WINRM_PASSWORD=${var.admin_password}",
+      "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
+      "WINDOWS_ISO_PATH=${local.windows_iso_path}",
+      "WINDOWS_VERSION=${var.windows_version}",
+    ]
+    scripts = [
+      "${path.root}/../scripts/verify-uefi-boot.ps1",
       "${path.root}/../scripts/01-install-virtio-drivers.ps1",
       "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
       "${path.root}/../scripts/03-configure-openssh.ps1",
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
-      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
     ]

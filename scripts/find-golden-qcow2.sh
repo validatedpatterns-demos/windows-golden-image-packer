@@ -66,6 +66,7 @@ if ((${#images[@]} == 0)); then
   echo "No qcow2 found under output/ or packer/output/ (run make build first)" >&2
   echo "Checked: ${search_dirs[*]}" >&2
   echo "Failed provision disks are usually output/.packer-*/work/packer-win*" >&2
+  echo "Recover: make recover-provision VERSION=2022  (see docs/recover-build.md)" >&2
   exit 1
 fi
 
