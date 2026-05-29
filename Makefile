@@ -122,6 +122,11 @@ build-version-uefi:
 	fi; \
 	test -f "$$install" || install="output/$(PACKER_STAGING)/packer-win$(VERSION)-$$edition_lc-install"; \
 	test -f "$$install" || (echo "UEFI install disk not found under output/$(PACKER_STAGING)" >&2; exit 1); \
+	echo ""; \
+	echo "=== Phase 2/2: Packer provision (OVMF, mbr2gpt, VirtIO, sysprep) ==="; \
+	echo "  Expect: Waiting for WinRM (up to 90m), then PowerShell scripts, then sysprep."; \
+	echo "  06-shrink-disk cipher /w can add 15-60+ minutes before sysprep."; \
+	echo ""; \
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var efi_boot=true \

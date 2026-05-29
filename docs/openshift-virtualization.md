@@ -10,16 +10,28 @@ The build produces a **sysprepped** **qcow2** image with VirtIO disk/network dri
 
 ## Disk and DataVolume size
 
-The qcow2 **virtual size** is set at build time by `disk_size` in `build.pkrvars.hcl` (default **60G** in `example.pkrvars.hcl`). CDI and `virtctl image-upload` require the target PVC/DataVolume to be **at least** that large.
+The qcow2 **virtual size** is set at build time by `disk_size` in `build.pkrvars.hcl` (default **40G**). CDI and `virtctl image-upload` require the target PVC/DataVolume to be **at least** that large.
 
-| Build setting | DataVolume / upload |
-|---------------|---------------------|
+| Build setting | DataVolume / upload (minimum) |
+|---------------|-------------------------------|
+| `disk_size = "40G"` | `storage: 40Gi`, `--size=40Gi` |
 | `disk_size = "60G"` | `storage: 60Gi`, `--size=60Gi` |
-| `disk_size = "80G"` | `storage: 80Gi`, `--size=80Gi` |
 
-Autounattend creates a small System Reserved partition and **extends** the Windows volume to use the rest of the disk, so lowering `disk_size` and **rebuilding** is the supported way to fit a smaller DataVolume. Shrinking an existing image in place is not supported by this repo.
+Autounattend creates a small System Reserved partition and **extends** the Windows volume to fill the build-time virtual disk. Lower `disk_size` and **rebuild** to reduce the import minimum. Shrinking an existing image in place is not supported by this repo.
 
-If you need more than 60G inside the guest, raise `disk_size` before `make build` and use the same value (with a `Gi` suffix) on import.
+### Larger disks on OpenShift (PVC &gt; golden image)
+
+You can import a **40G** golden image into a **larger** PVC (for example `storage: 100Gi`). On **first deploy boot** (sysprep OOBE), `extend-system-partition.ps1` runs from `sysprep-oobe.xml` and extends **C:** into any unallocated space.
+
+Requirements:
+
+1. DataVolume/PVC `storage` **≥** image virtual size (40Gi for the default build).
+2. Storage class allows the PVC size you request (`allowVolumeExpansion: true` if you resize later).
+3. After a **live PVC resize**, reboot the VM or rescan storage; run `extend-system-partition.ps1` again if C: did not grow (not automated on resize today).
+
+Logs: `C:\ProgramData\GoldenImage\extend-system-partition.log` after first boot.
+
+If you need the guest virtual disk to match build size exactly at import (no extension step), set `disk_size` to your target PVC size before `make build`.
 
 ### Exact DataVolume size after build
 
@@ -32,7 +44,7 @@ qemu-img info output/windows-server-2022-standard.qcow2
 ./scripts/qcow2-size-report.sh --json output/windows-server-2022-standard.qcow2
 ```
 
-Use the reported `DataVolume minimum` (e.g. `60Gi`) for `spec.pvc.resources.requests.storage` and `virtctl image-upload --size=`. Round up only if your cluster documents extra overhead; for standard CDI qcow2 import, matching virtual size in GiB is sufficient.
+Use the reported `DataVolume minimum` (e.g. `40Gi`) for `spec.pvc.resources.requests.storage` and `virtctl image-upload --size=`. You may request a **larger** PVC; first deploy boot extends C: automatically.
 
 Host-side re-encoding without rebuilding:
 
@@ -60,7 +72,7 @@ spec:
       - ReadWriteOnce
     resources:
       requests:
-        storage: 60Gi
+        storage: 40Gi
 ```
 
 Use `virtctl image-upload` or your cluster's documented import path to load `windows-server-2022-standard.qcow2`.
@@ -69,7 +81,7 @@ Use `virtctl image-upload` or your cluster's documented import path to load `win
 
 ```bash
 virtctl image-upload dv windows-server-2025-standard \
-  --size=60Gi \
+  --size=40Gi \
   --image-path=/home/you/gitwork/windows-golden-image-packer/output/windows-server-2025-standard.qcow2
 ```
 
@@ -82,7 +94,7 @@ To publish the same disk to **Quay** as a container image (optional), see [quay-
 - **Disk bus**: VirtIO
 - **Network**: masquerade/bridge with **VirtIO** model
 - **QEMU guest agent**: enabled on the VM spec so node operations work
-- **First boot**: sysprep OOBE runs once (locale and Administrator password come from `http/sysprep-oobe.xml.tpl` in `C:\Windows\Panther\unattend.xml`); the VM should stop at the **Administrator sign-in** screen. Set hostname and license per your process.
+- **First boot**: sysprep OOBE runs once (locale, disk extend, Administrator password from `http/sysprep-oobe.xml.tpl`); the VM should stop at the **Administrator sign-in** screen.
 
 ```yaml
 spec:

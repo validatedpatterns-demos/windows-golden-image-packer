@@ -2,7 +2,7 @@
 
 Boot tests validate that a built **qcow2** starts under libvirt with **VirtIO** disk and network — similar to a typical OpenShift Virtualization VM — without modifying the golden file you upload or publish.
 
-Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\Windows\Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot can take **10–20+ minutes**; do not power off during OOBE.
+Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\Windows\Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
 
 If you see **"The computer restarted unexpectedly"**, rebuild after fixing the sysprep answer files; clicking OK in a loop will not recover the VM.
 

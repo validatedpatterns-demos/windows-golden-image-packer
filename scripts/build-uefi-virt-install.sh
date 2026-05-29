@@ -27,7 +27,7 @@ INSTALL_FIRMWARE="${INSTALL_FIRMWARE:-$(read_hcl install_firmware seabios)}"
 
 VM_MEMORY="$(read_hcl vm_memory 8192)"
 VM_CPUS="$(read_hcl vm_cpus 4)"
-DISK_SIZE="$(read_hcl disk_size 60G)"
+DISK_SIZE="$(read_hcl disk_size 40G)"
 HEADLESS="$(read_hcl headless false)"
 
 if [[ "$VERSION" == "2025" ]]; then
@@ -65,6 +65,11 @@ PROVISION_ISO="$STAGING_DIR/provision.iso"
 UNATTEND_FLOPPY="$STAGING_DIR/unattend-floppy.img"
 VM_NAME="win-uefi-install-${VERSION}"
 LIBVIRT_CONNECT="${LIBVIRT_CONNECT:-qemu:///system}"
+
+log() {
+  # stdout so phase banners stay visible when make captures stderr from virt-install
+  echo "$*"
+}
 
 trap 'rm -f "$AUTOUNATTEND_XML"' EXIT
 
@@ -114,19 +119,24 @@ if [[ "$INSTALL_FIRMWARE" == "uefi" ]] && pkrvar_vtpm_enabled "$VAR_FILE" "$ROOT
   mapfile -t TPM_ARGS < <(libvirt_tpm_args "$VAR_FILE" "$ROOT" 1)
 fi
 
-echo "Starting Windows Server ${VERSION} install VM (${WINDOWS_EDITION})" >&2
-echo "  Install firmware: $INSTALL_FIRMWARE (final golden image is still UEFI after provision + mbr2gpt)" >&2
-echo "  Machine:          $INSTALL_MACHINE" >&2
-echo "  Windows ISO:      $WINDOWS_ISO (unmodified Microsoft media)" >&2
-echo "  Disk (install):   $DISK_PATH (SATA)" >&2
-echo "  PROVISION ISO:    $PROVISION_ISO" >&2
-echo "  Unattend floppy:  $UNATTEND_FLOPPY" >&2
+log ""
+log "=== Phase 1/2: Windows install (virt-install) ==="
+log "Unattended Setup runs in the libvirt VM; this phase usually takes 30-60 minutes."
+log "The golden image is still UEFI/GPT after Phase 2 (Packer mbr2gpt + virtio + sysprep)."
+log ""
+log "Starting Windows Server ${VERSION} install VM (${WINDOWS_EDITION})"
+log "  Install firmware: $INSTALL_FIRMWARE (SeaBIOS is normal; Packer converts to UEFI later)"
+log "  Machine:          $INSTALL_MACHINE"
+log "  Windows ISO:      $WINDOWS_ISO"
+log "  Install disk:     $DISK_PATH (SATA via libvirt)"
+log "  PROVISION ISO:    $PROVISION_ISO"
+log "  Unattend floppy:  $UNATTEND_FLOPPY"
 if [[ "$INSTALL_FIRMWARE" == "seabios" ]]; then
-  echo "  OVMF BdsDxe timeout on DVD? Expected — install uses SeaBIOS; Packer converts disk to UEFI." >&2
+  log "  Console: SeaBIOS + Windows Setup (no OVMF menu expected in this phase)"
 else
-  echo "  In OVMF menu pick UEFI: … DVD for the Windows ISO." >&2
+  log "  Console: pick UEFI: … DVD in the OVMF boot menu if prompted"
 fi
-
+log ""
 virt-install \
   --connect "$LIBVIRT_CONNECT" \
   --name "$VM_NAME" \
@@ -164,9 +174,30 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
+log "virt-install started (domain: $VM_NAME). Waiting for Windows Setup to finish and power off..."
+install_start=$(date +%s)
+last_progress=0
+while kill -0 "$INSTALL_PID" 2>/dev/null; do
+  now=$(date +%s)
+  elapsed=$((now - install_start))
+  if (( elapsed - last_progress >= 300 )); then
+    state="$(virsh --connect "$LIBVIRT_CONNECT" domstate "$VM_NAME" 2>/dev/null || echo unknown)"
+    mins=$((elapsed / 60))
+    log ""
+    log "  [${mins}m] Install still in progress (VM state: ${state}). Typical total: 30-60 minutes."
+    log "  Watch the VM: virt-viewer --connect $LIBVIRT_CONNECT $VM_NAME"
+    log "  After this phase: Packer provision (mbr2gpt, VirtIO drivers, sysprep)."
+    log ""
+    last_progress=$elapsed
+  fi
+  sleep 30
+done
 wait "$INSTALL_PID"
 
 libvirt_destroy_domain "$LIBVIRT_CONNECT" "$VM_NAME" 0
 
-echo "Install finished: $DISK_PATH"
-echo "Next: Packer provision (mbr2gpt + virtio + sysprep) boots with OVMF"
+log ""
+log "=== Phase 1/2 complete ==="
+log "Install finished: $DISK_PATH"
+log "Next: Phase 2 Packer provision (OVMF, mbr2gpt, virtio, sysprep) — typically 45-90 minutes."
+log ""

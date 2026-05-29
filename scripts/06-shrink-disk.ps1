@@ -14,6 +14,7 @@ function Test-PreserveTempItem {
     if ($name -eq 'drivers' -or $name -eq 'virtio-drivers') { return $true }
     if ($name -like 'packer-*') { return $true }
     if ($Item -is [System.IO.FileInfo] -and $name -like '*.ps1') { return $true }
+    if ($name -eq 'extend-system-partition.ps1') { return $true }
     if ($name -eq 'configure-oobe-locale.log') { return $true }
     return $false
 }

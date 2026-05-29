@@ -116,8 +116,8 @@ variable "vm_memory" {
 
 variable "disk_size" {
   type        = string
-  description = "Root disk virtual size (QEMU suffix, e.g. 60G). Must be <= your OpenShift DataVolume/PVC size; autounattend extends C: to fill this disk."
-  default     = "60G"
+  description = "Root disk virtual size (QEMU suffix, e.g. 40G). Minimum DataVolume/PVC on import; C: is extended on first deploy boot if the PVC is larger."
+  default     = "40G"
 }
 
 variable "install_disk_interface" {

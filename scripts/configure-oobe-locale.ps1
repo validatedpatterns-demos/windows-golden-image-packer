@@ -25,6 +25,17 @@ function Clear-UnattendProcessedState {
     }
 }
 
+function Publish-ExtendPartitionScript {
+    $src = 'C:\Windows\Temp\extend-system-partition.ps1'
+    if (-not (Test-Path -LiteralPath $src)) {
+        throw "Missing $src (Packer file provisioner must upload scripts/)"
+    }
+
+    New-Item -ItemType Directory -Path $goldenData -Force | Out-Null
+    Copy-Item -LiteralPath $src -Destination (Join-Path $goldenData 'extend-system-partition.ps1') -Force
+    Write-Host "Staged extend-system-partition.ps1 in $goldenData (first deploy boot)"
+}
+
 function Publish-OobeUnattend {
     $src = 'C:\Windows\Temp\sysprep-oobe.xml'
     if (-not (Test-Path $src)) {
@@ -225,6 +236,7 @@ Set-EnUsIntlRegistry
 Set-HideOobeLanguagePageRegistry
 Clear-UnattendProcessedState
 Set-PreSysprepAccountPolicy
+Publish-ExtendPartitionScript
 Publish-OobeInfoDefaults
 Publish-OobeUnattend
 

@@ -35,8 +35,9 @@ ssh_public_keys = [
 output_directory = "../output"
 vm_cpus          = 4
 vm_memory        = 8192
-# Virtual disk size; match or exceed this in DataVolume/PVC (e.g. 60G -> storage: 60Gi).
-disk_size        = "60G"
+# Virtual disk size at build (minimum DataVolume on import). Use a larger PVC in OpenShift;
+# first deploy boot extends C: automatically (extend-system-partition.ps1).
+disk_size        = "40G"
 headless         = false
 
 # true (default): UEFI install via virt-install, then Packer provision + sysprep (OpenShift/CNV).

@@ -42,6 +42,7 @@ copy_if_exists /ProgramData/GoldenImage/sysprep-diagnostics.log golden-sysprep-d
 copy_if_exists /Windows/Panther/sysprep-diagnostics.log panther-sysprep-diagnostics.log
 copy_if_exists /ProgramData/GoldenImage/prepare-for-sysprep.log prepare-for-sysprep.log
 copy_if_exists /ProgramData/GoldenImage/sysprep-oobe.xml golden-sysprep-oobe.xml
+copy_if_exists /ProgramData/GoldenImage/extend-system-partition.log golden-extend-system-partition.log
 copy_if_exists /Windows/Temp/configure-oobe-locale.log temp-configure-oobe-locale.log
 
 if [[ -f "$OUT_DIR/panther-unattend.xml" ]] && grep -q 'pass="windowsPE"' "$OUT_DIR/panther-unattend.xml" 2>/dev/null; then

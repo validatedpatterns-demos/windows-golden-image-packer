@@ -104,10 +104,10 @@ make image-size GOLDEN_QCOW2=output/windows-server-2022-standard.qcow2
 Example output:
 
 ```text
-DataVolume minimum:  60Gi  (storage.requests.storage: 60Gi)
+DataVolume minimum:  40Gi  (storage.requests.storage: 40Gi)
 ```
 
-That value is derived from the qcow2 **virtual size** (from `disk_size` at build time, default 60G). It does not shrink when the file is optimized. Set `disk_size` before `make build` if you need a smaller virtual disk.
+That value is derived from the qcow2 **virtual size** (from `disk_size` at build time, default 40G). It does not shrink when the file is optimized. Set `disk_size` before `make build` if you need a different minimum; use a larger OpenShift PVC and first-boot extension for bigger C: drives.
 
 Re-run host-side optimization without rebuilding:
 
@@ -140,7 +140,7 @@ IMAGE_OPTIMIZE=0 make build
 | `ssh_public_keys` | `[]` | List of OpenSSH public keys |
 | `ssh_public_keys_file` | `""` | File with one key per line |
 | `output_directory` | `../output` | qcow2 output directory |
-| `disk_size` | `60G` | Root disk virtual size; set DataVolume/PVC to at least this (e.g. `60Gi`) |
+| `disk_size` | `40G` | Build-time virtual size (import minimum); C: extends on first deploy boot if PVC is larger |
 | `install_disk_interface` | `ide` | Disk bus during Setup (`ide` recommended) |
 | `install_net_device` | `e1000` | NIC during install/WinRM (`e1000` until VirtIO net is installed) |
 | `efi_boot` | `false` | Packer install firmware; keep `false` on QEMU 10 |
