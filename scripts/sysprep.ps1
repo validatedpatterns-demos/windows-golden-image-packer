@@ -80,12 +80,21 @@ function Write-SysprepDiagnosticLogs {
     }
 }
 
+function Test-EspPresent {
+    $esp = Get-Partition -ErrorAction SilentlyContinue |
+        Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
+        Select-Object -First 1
+    if (-not $esp) {
+        throw 'EFI system partition not found before sysprep; run 08-convert-mbr-to-uefi.ps1 and 07-repair-uefi-boot.ps1 first.'
+    }
+}
+
 function Repair-UefiBootIfNeeded {
     $esp = Get-Partition -ErrorAction SilentlyContinue |
         Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } |
         Select-Object -First 1
     if (-not $esp) {
-        return
+        throw 'EFI system partition not found before sysprep; run 08-convert-mbr-to-uefi.ps1 and 07-repair-uefi-boot.ps1 first.'
     }
 
     $letter = (Get-Volume -Partition $esp -ErrorAction SilentlyContinue).DriveLetter
@@ -111,7 +120,8 @@ try {
         Write-Warning "clear-autologon.ps1 not found beside sysprep.ps1; image may autologon on first OpenShift boot"
     }
 
-    & (Join-Path $PSScriptRoot 'verify-uefi-boot.ps1')
+    # SeaBIOS provision pass runs sysprep before OVMF reboot; verify ESP only (not firmware type).
+    Test-EspPresent
 
     $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
     if (-not (Test-Path $sysprep)) {

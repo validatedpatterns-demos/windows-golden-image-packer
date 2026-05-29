@@ -30,9 +30,8 @@ function Install-OpenSshServerAsSystem {
     Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue |
         Unregister-ScheduledTask -Confirm:$false
 
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath
-    )
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 

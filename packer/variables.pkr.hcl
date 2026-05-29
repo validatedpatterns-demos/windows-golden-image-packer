@@ -40,6 +40,12 @@ variable "install_firmware" {
   }
 }
 
+variable "install_auto_shutdown" {
+  type        = bool
+  description = "Shut down the guest after unattended install (virt-install pass 1). Required so virt-install --wait completes; not used for single-pass Packer install (WinRM must stay up)."
+  default     = false
+}
+
 variable "vtpm" {
   type        = bool
   description = "Emulated TPM 2.0 (swtpm) on UEFI/q35 VMs during build and install. Matches OpenShift Virtualization vTPM expectations for Windows Server 2022+."

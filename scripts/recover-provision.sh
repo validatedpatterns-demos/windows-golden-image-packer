@@ -69,13 +69,7 @@ file_size_human() {
 }
 
 resolve_install_disk() {
-  local staging="$1" version="$2"
-  local base="$staging/packer-win${version}-${EDITION_LC}-install"
-  if [[ -f "${base}.qcow2" ]]; then
-    echo "${base}.qcow2"
-  elif [[ -f "$base" ]]; then
-    echo "$base"
-  fi
+  "$ROOT/scripts/resolve-install-disk.sh" "$1" "$2" "$EDITION_LC" 2>/dev/null || true
 }
 
 resolve_work_disks() {
@@ -136,7 +130,7 @@ EFI_BOOT="$("$ROOT/scripts/read-pkrvar.sh" efi_boot "$VAR_FILE" true)"
 
 echo "=== Recover provision (Windows Server ${VERSION} ${WINDOWS_EDITION}) ==="
 echo "Staging:   $STAGING"
-echo "efi_boot:  $EFI_BOOT (from $(basename "$VAR_FILE"); GPT recovery requires true)"
+echo "efi_boot:  $EFI_BOOT (virt-install pass; provision picks SeaBIOS vs OVMF from disk layout)"
 echo ""
 
 if [[ -n "$INSTALL_DISK" ]]; then
@@ -217,10 +211,10 @@ if [[ "$REDO_FROM_INSTALL" -eq 1 ]]; then
 fi
 
 LAYOUT="$(disk_gpt_hint "$RECOMMENDED")"
-if [[ "$LAYOUT" == GPT && "$EFI_BOOT" != true ]]; then
-  echo "ERROR: $RECOMMENDED is GPT but efi_boot is not true in $VAR_FILE." >&2
-  echo "Set efi_boot = true, then re-run this script. SeaBIOS cannot boot a post-mbr2gpt disk." >&2
-  exit 1
+if [[ "$LAYOUT" == GPT ]]; then
+  FIRMWARE_MSG="OVMF/q35 (auto-detected GPT disk)"
+else
+  FIRMWARE_MSG="SeaBIOS/pc (MBR install or pre-mbr2gpt work disk)"
 fi
 
 RECOVERY_DIR="$STAGING/recovery"
@@ -228,7 +222,7 @@ SAFE_COPY="$RECOVERY_DIR/salvage-${VERSION}-${EDITION_LC}.qcow2"
 
 echo "Situation: $RECOMMENDED_REASON"
 echo "Source:    $RECOMMENDED ($LAYOUT)"
-echo "Action:    copy out of work/, then run provision-only with OVMF (efi_boot=true)."
+echo "Action:    copy out of work/, then run provision-only ($FIRMWARE_MSG)."
 echo ""
 echo "  EXECUTE=1 make recover-provision VERSION=${VERSION}"
 echo ""
@@ -241,6 +235,22 @@ echo ""
 if [[ "$EXECUTE" -ne 1 ]]; then
   exit 0
 fi
+
+if [[ "$LAYOUT" == GPT ]]; then
+  if [[ -f "$SAFE_COPY" ]]; then
+    schedule_profile=provision-gpt
+  else
+    schedule_profile=recover-gpt
+  fi
+else
+  if [[ -f "$SAFE_COPY" ]]; then
+    schedule_profile=provision-mbr
+  else
+    schedule_profile=recover-mbr
+  fi
+fi
+BUILD_SCHEDULE_LOG="$STAGING/build-schedule.log" "$ROOT/scripts/print-build-schedule.sh" "$schedule_profile"
+echo ""
 
 mkdir -p "$RECOVERY_DIR"
 if [[ -f "$SAFE_COPY" ]]; then

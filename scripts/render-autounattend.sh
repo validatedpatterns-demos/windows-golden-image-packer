@@ -24,11 +24,16 @@ if [[ "$UEFI" != "1" ]]; then
   EFI_FLAG="-var=efi_boot=false"
 fi
 
+SHUTDOWN_FLAG="-var=install_auto_shutdown=false"
+if [[ "${INSTALL_AUTO_SHUTDOWN:-0}" == "1" ]]; then
+  SHUTDOWN_FLAG="-var=install_auto_shutdown=true"
+fi
+
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 
 # shellcheck disable=SC2016
-packer console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" $EFI_FLAG . <<'EOF' | sed -n '/^<?xml/,/^<\/unattend>/p' >"$rendered"
+packer console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" $EFI_FLAG $SHUTDOWN_FLAG . <<'EOF' | sed -n '/^<?xml/,/^<\/unattend>/p' >"$rendered"
 local.autounattend
 EOF
 
@@ -39,7 +44,10 @@ if grep -q '<sensitive>' "$rendered"; then
 fi
 
 if command -v xmllint >/dev/null 2>&1; then
-  xmllint --noout "$rendered" >&2
+  if ! xmllint --noout "$rendered" 2>&1; then
+    echo "ERROR: autounattend.xml failed xmllint validation (fix templates under http/)." >&2
+    exit 1
+  fi
 fi
 
 cat "$rendered"

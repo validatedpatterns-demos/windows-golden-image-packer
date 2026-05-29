@@ -88,7 +88,7 @@ case "$INSTALL_FIRMWARE" in
     ;;
 esac
 
-UEFI="$UEFI_FLAG" VERSION="$VERSION" VAR_FILE="$VAR_FILE" "$ROOT/scripts/render-autounattend.sh" >"$AUTOUNATTEND_XML"
+UEFI="$UEFI_FLAG" VERSION="$VERSION" VAR_FILE="$VAR_FILE" INSTALL_AUTO_SHUTDOWN=1 "$ROOT/scripts/render-autounattend.sh" >"$AUTOUNATTEND_XML"
 OUT="$PROVISION_ISO" "$ROOT/scripts/create-provision-iso.sh" "$AUTOUNATTEND_XML"
 "$ROOT/scripts/create-unattend-floppy-image.sh" "$AUTOUNATTEND_XML" "$UNATTEND_FLOPPY"
 
@@ -175,6 +175,7 @@ for _ in $(seq 1 60); do
 done
 
 log "virt-install started (domain: $VM_NAME). Waiting for Windows Setup to finish and power off..."
+log "  When unattended install succeeds, the guest shuts down automatically (Server Manager = install done; run: shutdown /s /t 0)"
 install_start=$(date +%s)
 last_progress=0
 while kill -0 "$INSTALL_PID" 2>/dev/null; do
@@ -195,6 +196,8 @@ done
 wait "$INSTALL_PID"
 
 libvirt_destroy_domain "$LIBVIRT_CONNECT" "$VM_NAME" 0
+
+libvirt_fixup_disk_for_build_user "$DISK_PATH"
 
 log ""
 log "=== Phase 1/2 complete ==="

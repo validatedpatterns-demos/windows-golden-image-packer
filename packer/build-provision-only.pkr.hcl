@@ -1,13 +1,17 @@
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Optional pass 2: boot an existing qcow2 (after a failed or partial build) and run provisioners + sysprep only.
+# Optional pass 2: boot an existing qcow2 and run provisioners + sysprep only.
+#
+# Two builds (pick with -only):
+#   windows-golden-provision-mbr  — SeaBIOS/pc for virt-install MBR install disks
+#   windows-golden-provision-gpt  — OVMF/q35 for GPT salvage / post-mbr2gpt recovery
+#
 # Usage:
-#   make recover-provision VERSION=2022              # diagnose
-#   EXECUTE=1 make recover-provision VERSION=2022  # safe retry
-#   make build-provision-only VERSION=2022 BASE_IMAGE=output/.packer-2022/recovery/salvage.qcow2
+#   make build-provision-only VERSION=2022 BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2
+#   EXECUTE=1 make recover-provision VERSION=2022
 
-source "qemu" "from_install" {
+source "qemu" "from_install_mbr" {
   vm_name          = "${local.vm_name}-provision"
   output_directory = var.output_directory
   accelerator      = var.qemu_accelerator
@@ -15,29 +19,60 @@ source "qemu" "from_install" {
   memory           = var.vm_memory
   headless         = var.headless
   disk_image       = true
-  iso_url          = var.base_image_path # qcow2 from make build-install
+  iso_url          = var.base_image_path
   iso_checksum     = "none"
-  # Existing install/salvage images already have the correct virtual size; resizing
-  # (especially 60G decimal vs 60 GiB) makes qemu-img require --shrink and abort.
   skip_resize_disk = true
   disk_interface   = var.provision_disk_interface
   net_device       = var.install_net_device
-  machine_type     = local.install_machine_type
+  machine_type     = "pc"
   cpu_model        = "host"
 
-  efi_boot          = var.efi_boot
-  efi_firmware_code = var.efi_boot ? var.ovmf_code_path : ""
-  efi_firmware_vars = var.efi_boot ? var.ovmf_vars_path : ""
-  vtpm              = local.use_vtpm
+  efi_boot = false
 
-  cd_label   = "PROVISION"
-  cd_files   = local.provision_cd_files
+  cd_label = "PROVISION"
+  cd_files = local.provision_cd_files
 
-  # Prefer the converted GPT/UEFI system disk over any CD after mbr2gpt.
-  qemuargs = var.efi_boot ? [
-    ["-boot", "order=c"],
+  qemuargs = [
     ["-device", "qemu-xhci"],
-  ] : [
+  ]
+
+  communicator   = "winrm"
+  winrm_username = var.winrm_username
+  winrm_password = var.admin_password
+  winrm_timeout  = var.winrm_timeout
+  winrm_use_ssl  = false
+  winrm_port     = 5985
+
+  shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
+  shutdown_timeout = "45m"
+}
+
+source "qemu" "from_install_gpt" {
+  vm_name          = "${local.vm_name}-provision"
+  output_directory = var.output_directory
+  accelerator      = var.qemu_accelerator
+  cpus             = var.vm_cpus
+  memory           = var.vm_memory
+  headless         = var.headless
+  disk_image       = true
+  iso_url          = var.base_image_path
+  iso_checksum     = "none"
+  skip_resize_disk = true
+  disk_interface   = var.provision_disk_interface
+  net_device       = var.install_net_device
+  machine_type     = "q35"
+  cpu_model        = "host"
+
+  efi_boot          = true
+  efi_firmware_code = var.ovmf_code_path
+  efi_firmware_vars = var.ovmf_vars_path
+  vtpm              = var.vtpm
+
+  cd_label = "PROVISION"
+  cd_files = local.provision_cd_files
+
+  qemuargs = [
+    ["-boot", "order=c"],
     ["-device", "qemu-xhci"],
   ]
 
@@ -53,8 +88,77 @@ source "qemu" "from_install" {
 }
 
 build {
-  name    = "windows-golden-provision-only"
-  sources = ["source.qemu.from_install"]
+  name    = "windows-golden-provision-mbr"
+  sources = ["source.qemu.from_install_mbr"]
+
+  provisioner "file" {
+    destination = "C:/Windows/Temp/"
+    source      = "${path.root}/../scripts/"
+  }
+
+  provisioner "file" {
+    content     = local.sysprep_generalize_unattend
+    destination = "C:/Windows/Temp/sysprep-generalize.xml"
+  }
+
+  provisioner "file" {
+    content     = local.sysprep_oobe_unattend
+    destination = "C:/Windows/Temp/sysprep-oobe.xml"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../http/oobe-info-defaults.xml"
+    destination = "C:/Windows/Temp/oobe-info-defaults.xml"
+  }
+
+  provisioner "file" {
+    destination = "C:/Windows/Temp/"
+    source      = "${path.root}/../drivers"
+  }
+
+  # VirtIO while SeaBIOS can still boot the MBR disk, then one reboot.
+  provisioner "powershell" {
+    environment_vars = local.provision_env_vars
+    scripts          = ["${path.root}/../scripts/01-install-virtio-drivers.ps1"]
+  }
+
+  provisioner "windows-restart" {
+    restart_timeout = "30m"
+  }
+
+  # mbr2gpt + UEFI boot files. No reboot here — SeaBIOS cannot boot GPT/UEFI-only afterward.
+  provisioner "powershell" {
+    environment_vars = local.provision_env_vars
+    scripts = [
+      "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
+      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
+    ]
+  }
+
+  provisioner "powershell" {
+    environment_vars = local.provision_env_vars
+    scripts = [
+      "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
+      "${path.root}/../scripts/03-configure-openssh.ps1",
+      "${path.root}/../scripts/04-set-administrator-password.ps1",
+      "${path.root}/../scripts/05-inject-ssh-keys.ps1",
+      "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/06-shrink-disk.ps1",
+      "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
+    ]
+  }
+
+  post-processor "shell-local" {
+    inline = [
+      "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-provision\" \"${local.output_image_name}\"",
+      "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
+    ]
+  }
+}
+
+build {
+  name    = "windows-golden-provision-gpt"
+  sources = ["source.qemu.from_install_gpt"]
 
   provisioner "file" {
     destination = "C:/Windows/Temp/"
@@ -82,12 +186,7 @@ build {
   }
 
   provisioner "powershell" {
-    environment_vars = [
-      "WINRM_PASSWORD=${var.admin_password}",
-      "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
-      "WINDOWS_ISO_PATH=${local.windows_iso_path}",
-      "WINDOWS_VERSION=${var.windows_version}",
-    ]
+    environment_vars = local.provision_env_vars
     scripts = [
       "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
@@ -99,12 +198,7 @@ build {
   }
 
   provisioner "powershell" {
-    environment_vars = [
-      "WINRM_PASSWORD=${var.admin_password}",
-      "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
-      "WINDOWS_ISO_PATH=${local.windows_iso_path}",
-      "WINDOWS_VERSION=${var.windows_version}",
-    ]
+    environment_vars = local.provision_env_vars
     scripts = [
       "${path.root}/../scripts/verify-uefi-boot.ps1",
       "${path.root}/../scripts/01-install-virtio-drivers.ps1",

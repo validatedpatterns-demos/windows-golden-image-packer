@@ -8,7 +8,7 @@ Windows Setup itself runs several **unattend passes** in order (`windowsPE` → 
 
 | Step | What happens |
 |------|----------------|
-| **Setup (unattend)** | SeaBIOS (`pc`), **IDE** disk, **e1000** NIC. Floppy has `autounattend.xml` + `enable-winrm.cmd`. Installs Windows and enables WinRM in the **specialize** pass. |
+| **Setup (unattend)** | SeaBIOS (`pc`), **IDE** disk, **e1000** NIC. Floppy has `autounattend.xml` + `enable-winrm.cmd`. Installs Windows and enables WinRM in the **specialize** pass (OpenSSH is deferred to Phase 2). |
 | **Packer provisioners** | WinRM: VirtIO drivers, QEMU guest agent, OpenSSH, password/keys, **sysprep**. |
 
 Defaults in `packer/variables.pkr.hcl`:

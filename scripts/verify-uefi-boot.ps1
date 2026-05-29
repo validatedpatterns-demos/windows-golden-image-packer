@@ -1,7 +1,8 @@
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Fail fast if the provision pass booted with SeaBIOS after mbr2gpt (GPT disks need OVMF).
+# Fail fast if the provision pass booted with SeaBIOS after mbr2gpt when OVMF was expected.
+# Used by the GPT/OVMF provision path only (see build-provision-only.pkr.hcl); not sysprep.ps1.
 $ErrorActionPreference = 'Stop'
 
 function Get-FirmwareType {

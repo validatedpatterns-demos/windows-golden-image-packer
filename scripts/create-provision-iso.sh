@@ -32,6 +32,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 cp "$AUTOUNATTEND" "$WORKDIR/autounattend.xml"
 cp "$AUTOUNATTEND" "$WORKDIR/unattend.xml"
 cp -a "$ROOT/drivers/." "$WORKDIR/"
+"$ROOT/scripts/stage-unattend-media-files.sh" "$WORKDIR"
 
 mkdir -p "$(dirname "$OUT")"
 xorriso -as mkisofs \

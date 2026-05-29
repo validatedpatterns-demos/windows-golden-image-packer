@@ -45,7 +45,10 @@ locals {
   enable_winrm_locator = file("${path.root}/../http/enable-winrm-locator.cmd")
 
   specialize_winrm_xml   = file("${path.root}/../http/specialize-winrm.xml.tpl")
-  firstlogon_commands_xml = file("${path.root}/../http/firstlogon-winrm.xml.tpl")
+  firstlogon_commands_xml = join("\n", compact([
+    file("${path.root}/../http/firstlogon-winrm.xml.tpl"),
+    var.install_auto_shutdown ? file("${path.root}/../http/firstlogon-install-shutdown.xml.tpl") : "",
+  ]))
 
   # IDE install: stage VirtIO block/SCSI/NIC drivers during specialize (PROVISION CD paths).
   specialize_virtio_xml = local.include_winpe_virtio_drivers ? "" : templatefile(
@@ -118,9 +121,6 @@ locals {
     "enable-winrm.ps1"            = local.enable_winrm_ps1
     "enable-winrm.cmd"            = local.enable_winrm_cmd
     "enable-winrm-locator.cmd"    = local.enable_winrm_locator
-    "install-openssh-server.ps1"   = file("${path.root}/../scripts/install-openssh-server.ps1")
-    "OpenSSH-Server-Common.ps1"    = file("${path.root}/../scripts/OpenSSH-Server-Common.ps1")
-    "install-openssh-locator.cmd" = file("${path.root}/../http/install-openssh-locator.cmd")
     "clear-autologon.ps1"         = file("${path.root}/../scripts/clear-autologon.ps1")
   }
 
@@ -131,5 +131,12 @@ locals {
   # PROVISION CD: driver *contents* at CD root (viostor\2k22\amd64). WinRM also uploads drivers/ (~27MB).
   provision_cd_files = [
     "${path.root}/../drivers/*",
+  ]
+
+  provision_env_vars = [
+    "WINRM_PASSWORD=${var.admin_password}",
+    "SSH_PUBLIC_KEYS=${jsonencode(local.ssh_keys_combined)}",
+    "WINDOWS_ISO_PATH=${local.windows_iso_path}",
+    "WINDOWS_VERSION=${var.windows_version}",
   ]
 }

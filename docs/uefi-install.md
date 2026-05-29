@@ -61,7 +61,7 @@ That message means **Windows Setup is running in legacy BIOS mode** while the an
 4. Do not use `efi_boot = false` / `autounattend-bios.xml.tpl` for OpenShift images.
 
 If you see the opposite text — **MBR partition table … only be installed on GPT disks** — the VM is UEFI but the target disk is still MBR; wipe the install qcow2 and rebuild with the current `autounattend.xml.tpl`.
-3. Runs Packer **provision-only** with `efi_boot=true` (VirtIO, sysprep, same scripts as the SeaBIOS path).
+3. Runs Packer **provision-only** on **SeaBIOS/pc** (virt-install leaves an MBR disk), then `mbr2gpt` + virtio + sysprep. GPT salvage recovery uses OVMF automatically.
 
 Manual single-version install only:
 

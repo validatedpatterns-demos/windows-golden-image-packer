@@ -138,7 +138,32 @@ golden_image_has_efi_partition() {
   if ! command -v virt-filesystems >/dev/null 2>&1; then
     return 2
   fi
-  virt-filesystems -a "$image" --all 2>/dev/null | grep -qE '/boot/efi|/efi'
+
+  # Linux images expose ESP mount points; Windows ESP is usually not mounted in the guest view.
+  if virt-filesystems -a "$image" --all 2>/dev/null | grep -qE '/boot/efi|/efi'; then
+    return 0
+  fi
+
+  # Windows post-mbr2gpt: inspect GPT partition types for the EFI system partition GUID.
+  if command -v guestfish >/dev/null 2>&1; then
+    local -a parts=()
+    local part disk num type upper
+    local esp_guid='C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
+    mapfile -t parts < <(guestfish --ro -a "$image" run : list-partitions 2>/dev/null || true)
+    for part in "${parts[@]}"; do
+      [[ -z "$part" ]] && continue
+      num="${part##*[!0-9]}"
+      disk="${part%"$num"}"
+      [[ -z "$num" || -z "$disk" ]] && continue
+      type="$(guestfish --ro -a "$image" run : part-get-gpt-type "$disk" "$num" 2>/dev/null || true)"
+      upper="$(echo "$type" | tr '[:lower:]' '[:upper:]')"
+      if [[ "$upper" == "$esp_guid" ]]; then
+        return 0
+      fi
+    done
+  fi
+
+  return 1
 }
 
 # Match install bus (SATA) so OVMF can read the ESP without a driver switch.
@@ -176,4 +201,30 @@ libvirt_tpm_args() {
 
   # tpm-crb + TPM 2.0 matches q35/UEFI and OpenShift persistent vTPM.
   printf '%s\n' "--tpm" "backend.type=emulator,backend.version=2.0,model=tpm-crb"
+}
+
+# qemu:///system + dynamic_ownership often leaves qcow2 in $HOME as nobody:nobody mode 0600.
+# Packer (running as the build user) must read the install disk for pass 2.
+libvirt_fixup_disk_for_build_user() {
+  local disk="$1"
+  [[ -f "$disk" ]] || return 0
+  if [[ -r "$disk" && -w "$disk" ]]; then
+    return 0
+  fi
+
+  local build_user="${SUDO_USER:-${USER:-$(id -un)}}"
+  local before
+  before="$(stat -c '%U:%G %a' "$disk" 2>/dev/null || echo unknown)"
+  echo "Restoring install disk permissions for Packer (was $before): $disk" >&2
+
+  if sudo chown "$build_user:$build_user" "$disk" 2>/dev/null && sudo chmod u+rw "$disk" 2>/dev/null; then
+    return 0
+  fi
+  if chown "$build_user:$build_user" "$disk" 2>/dev/null && chmod u+rw "$disk" 2>/dev/null; then
+    return 0
+  fi
+
+  echo "ERROR: cannot read $disk (libvirt qemu user owns it)." >&2
+  echo "  sudo chown $build_user:$build_user '$disk' && chmod u+rw '$disk'" >&2
+  return 1
 }

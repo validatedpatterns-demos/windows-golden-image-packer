@@ -16,9 +16,10 @@ PUSH_QUAY         ?= 0
 GOLDEN_QCOW2      ?=
 
 # Run from packer/ on "." so variables.pkr.hcl + locals.pkr.hcl load; -only must be the full build id (packer 1.11+).
-PACKER_ONLY_GOLDEN     := -only=windows-golden-image.qemu.windows
-PACKER_ONLY_INSTALL    := -only=windows-install-only.qemu.install
-PACKER_ONLY_PROVISION  := -only=windows-golden-provision-only.qemu.from_install
+PACKER_ONLY_GOLDEN          := -only=windows-golden-image.qemu.windows
+PACKER_ONLY_INSTALL         := -only=windows-install-only.qemu.install
+PACKER_ONLY_PROVISION_MBR   := -only=windows-golden-provision-mbr.qemu.from_install_mbr
+PACKER_ONLY_PROVISION_GPT   := -only=windows-golden-provision-gpt.qemu.from_install_gpt
 
 # Packer deletes output_directory at the start of each build (-force) and on failure/cancel
 # (default -on-error=cleanup). Per-version staging keeps install media separate from packer work/.
@@ -27,7 +28,7 @@ PACKER_WORK_SUBDIR     = work
 # abort: keep VM/qcow2 on Ctrl+C or provision failure (retry with build-provision-only). cleanup: Packer default.
 PACKER_ON_ERROR       ?= abort
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only recover-provision build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
+.PHONY: help init validate build build-versions build-version build-install build-provision-only recover-provision print-build-schedule build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
 
 help:
 	@echo "Targets:"
@@ -51,6 +52,7 @@ help:
 	@echo "  boot-test-image IMAGE=path/to.qcow2   test one file"
 	@echo "  inspect-image IMAGE=path/to.qcow2     partition/firmware hints"
 	@echo "  extract-sysprep-log [IMAGE=...] [OUT_DIR=./golden-logs]  sysprep diagnostics from qcow2"
+	@echo "  print-build-schedule PROFILE  Print step ETAs (see scripts/print-build-schedule.sh)"
 	@echo "  build-push      make build then push-quay (all images found)"
 	@echo "  clean           Kill Packer QEMU + libvirt build/boot-test VMs; remove artifacts"
 	@echo "  clean-force     clean, ignoring QEMU processes that refuse to exit"
@@ -112,32 +114,50 @@ build-version-uefi:
 	@command -v virt-install >/dev/null || (echo "virt-install required for efi_boot=true (dnf install virt-install)" >&2; exit 1)
 	mkdir -p "output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR)"
 	rm -f output/windows-server-$(VERSION)-*.qcow2 packer/output/windows-server-$(VERSION)-*.qcow2 2>/dev/null || true
-	@edition_lc="$$(echo '$(WINDOWS_EDITION)' | tr '[:upper:]' '[:lower:]')"; \
-	install="output/$(PACKER_STAGING)/packer-win$(VERSION)-$$edition_lc-install.qcow2"; \
-	if [ "$(SKIP_INSTALL)" = "1" ] && [ -f "$$install" ]; then \
+	@set -euo pipefail; \
+	edition_lc="$$(echo '$(WINDOWS_EDITION)' | tr '[:upper:]' '[:lower:]')"; \
+	staging="output/$(PACKER_STAGING)"; \
+	schedule_profile=full-uefi; \
+	if [ "$(SKIP_INSTALL)" = "1" ]; then schedule_profile=skip-install; \
+	elif [ -n "$$(./scripts/resolve-install-disk.sh "$$staging" "$(VERSION)" "$$edition_lc" 2>/dev/null || true)" ]; then \
+	  schedule_profile=skip-install; \
+	fi; \
+	BUILD_SCHEDULE_LOG="$$staging/build-schedule.log" ./scripts/print-build-schedule.sh "$$schedule_profile"; \
+	echo ""; \
+	install=""; \
+	if [ "$(SKIP_INSTALL)" = "1" ]; then \
+	  install="$$(./scripts/resolve-install-disk.sh "$$staging" "$(VERSION)" "$$edition_lc")"; \
 	  echo "SKIP_INSTALL=1: reusing $$install"; \
 	else \
-	  VERSION=$(VERSION) WINDOWS_EDITION=$(WINDOWS_EDITION) PACKER_STAGING=$(PACKER_STAGING) \
-		./scripts/build-uefi-virt-install.sh; \
+	  install="$$(./scripts/resolve-install-disk.sh "$$staging" "$(VERSION)" "$$edition_lc" 2>/dev/null || true)"; \
+	  if [ -z "$$install" ]; then \
+	    VERSION=$(VERSION) WINDOWS_EDITION=$(WINDOWS_EDITION) PACKER_STAGING=$(PACKER_STAGING) \
+	      ./scripts/build-uefi-virt-install.sh; \
+	  else \
+	    echo "Reusing existing install disk: $$install"; \
+	  fi; \
+	  install="$$(./scripts/resolve-install-disk.sh "$$staging" "$(VERSION)" "$$edition_lc")"; \
 	fi; \
-	test -f "$$install" || install="output/$(PACKER_STAGING)/packer-win$(VERSION)-$$edition_lc-install"; \
-	test -f "$$install" || (echo "UEFI install disk not found under output/$(PACKER_STAGING)" >&2; exit 1); \
+	if [ -z "$$install" ]; then \
+	  echo "ERROR: No install disk after Phase 1; cannot start Packer provision." >&2; \
+	  exit 1; \
+	fi; \
 	echo ""; \
-	echo "=== Phase 2/2: Packer provision (OVMF, mbr2gpt, VirtIO, sysprep) ==="; \
-	echo "  Expect: Waiting for WinRM (up to 90m), then PowerShell scripts, then sysprep."; \
-	echo "  06-shrink-disk cipher /w can add 15-60+ minutes before sysprep."; \
+	echo "=== Phase 2/2: Packer provision (SeaBIOS on MBR install disk, mbr2gpt, VirtIO, sysprep) ==="; \
+	echo "  Install disk: $$install"; \
 	echo ""; \
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
-		-var efi_boot=true \
-		-var base_image_path=../$$install \
+		-var base_image_path=$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
-		$(PACKER_ONLY_PROVISION) .
+		$(PACKER_ONLY_PROVISION_MBR) .
 	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
 build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
+	@BUILD_SCHEDULE_LOG="output/$(PACKER_STAGING)/build-schedule.log" ./scripts/print-build-schedule.sh install-only; \
+	echo ""
 	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
@@ -156,20 +176,39 @@ build-provision-only: stage-virtio init
 	staging_dir="$$(dirname "$$base")"; \
 	work_dir="$$staging_dir/work"; \
 	mkdir -p "$$work_dir"; \
-	efi="$$(./scripts/read-pkrvar.sh efi_boot $(VAR_FILE) true)"; \
 	version="$(VERSION)"; \
 	if [ -z "$$version" ]; then \
 	  version="$$(echo "$$base" | sed -n 's|.*/\.packer-\([0-9][0-9][0-9][0-9]\)/.*|\1|p')"; \
 	fi; \
-	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir -var efi_boot=$$efi"; \
+	. ./scripts/libvirt-vm-disk.sh; \
+	prov_target=mbr; \
+	if [ "$(BASE_IMAGE_IS_GPT)" = "1" ]; then prov_target=gpt; \
+	elif command -v virt-filesystems >/dev/null 2>&1 && golden_image_has_efi_partition "$$base"; then prov_target=gpt; \
+	fi; \
+	if [ "$$prov_target" = gpt ]; then \
+	  echo "Provision firmware: OVMF/q35 (GPT disk)"; \
+	  only="$(PACKER_ONLY_PROVISION_GPT)"; \
+	  schedule_profile=provision-gpt; \
+	else \
+	  echo "Provision firmware: SeaBIOS/pc (MBR install disk)"; \
+	  only="$(PACKER_ONLY_PROVISION_MBR)"; \
+	  schedule_profile=provision-mbr; \
+	fi; \
+	BUILD_SCHEDULE_LOG="$$staging_dir/build-schedule.log" ./scripts/print-build-schedule.sh "$$schedule_profile"; \
+	echo ""; \
+	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
 	if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
 	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_edition=$(WINDOWS_EDITION) \
 		$$prov_args \
-		$(PACKER_ONLY_PROVISION) .
+		$$only .
 
 recover-provision: stage-virtio init
 	./scripts/recover-provision.sh $(if $(EXECUTE),--execute,)
+
+print-build-schedule:
+	@test -n "$(PROFILE)" || (echo "Set PROFILE=full-uefi|skip-install|provision-mbr|provision-gpt|recover-gpt|recover-mbr|install-only" >&2; exit 1)
+	@BUILD_SCHEDULE_LOG="$(BUILD_SCHEDULE_LOG)" ./scripts/print-build-schedule.sh "$(PROFILE)"
 
 build-2022: stage-virtio init
 	$(MAKE) build-version VERSION=2022
