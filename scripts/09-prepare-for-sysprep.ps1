@@ -9,6 +9,8 @@ New-Item -ItemType Directory -Path $goldenData -Force | Out-Null
 $logPath = Join-Path $goldenData 'prepare-for-sysprep.log'
 Start-Transcript -Path $logPath -Force | Out-Null
 
+. (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
+
 function Test-PendingReboot {
     $paths = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
@@ -29,22 +31,6 @@ function Stop-UpdateServices {
         if ($svc -and $svc.Status -eq 'Running') {
             Write-Host "Stopping service $name"
             Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-function Remove-SysprepBlockingAppx {
-    $patterns = @(
-        'Microsoft.MicrosoftEdge.Stable',
-        'Microsoft.MicrosoftEdgeDevToolsClient',
-        'Microsoft.Windows.CloudExperienceHost'
-    )
-    foreach ($pkg in Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue) {
-        foreach ($pattern in $patterns) {
-            if ($pkg.DisplayName -like "*$pattern*") {
-                Write-Host "Removing provisioned AppX: $($pkg.DisplayName)"
-                Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
-            }
         }
     }
 }

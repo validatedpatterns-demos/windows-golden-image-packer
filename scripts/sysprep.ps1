@@ -178,6 +178,10 @@ try {
 
     Repair-UefiBootIfNeeded
 
+    . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
+    Write-Host 'Running last-chance AppX cleanup before sysprep...'
+    Remove-SysprepBlockingAppx
+
     $unattend = $generalizeUnattend
     $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/shutdown', "/unattend:$unattend")
     Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
