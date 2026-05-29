@@ -37,7 +37,7 @@ source "qemu" "from_install" {
   winrm_port     = 5985
 
   shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
-  shutdown_timeout = "30m"
+  shutdown_timeout = "45m"
 }
 
 build {

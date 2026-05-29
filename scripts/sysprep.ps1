@@ -74,6 +74,32 @@ Write-Host "Staged OOBE-only unattend in Panther for first deploy boot"
 # Sysprep must not use the oobeSystem file; generalize pass copies sysprep-oobe.xml back to Panther.
 $unattend = $generalizeUnattend
 
+function Write-SysprepDiagnosticLogs {
+    foreach ($dir in @($sysprepPanther, $panther)) {
+        if (-not (Test-Path $dir)) { continue }
+        foreach ($name in @('setuperr.log', 'setupact.log')) {
+            $path = Join-Path $dir $name
+            if (-not (Test-Path $path)) { continue }
+            Write-Host "=== $path ==="
+            Get-Content -Path $path -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        }
+    }
+}
+
+if (-not (Test-Path $oobeUnattendPersistent)) {
+    throw "Missing $oobeUnattendPersistent (configure-oobe-locale.ps1 must run before sysprep)"
+}
+
 $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', '/shutdown', "/unattend:$unattend")
 Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
 & $sysprep @sysprepArgs
+$sysprepExit = $LASTEXITCODE
+if ($sysprepExit -ne 0) {
+    Write-Host "sysprep.exe exited with code $sysprepExit"
+    Write-SysprepDiagnosticLogs
+    throw "sysprep.exe failed (exit $sysprepExit). See setuperr.log above; common causes: pending reboot, Windows Update, or AppX packages blocking generalize."
+}
+
+Write-Host 'sysprep.exe completed; waiting for /shutdown to power off the VM'
+# /shutdown should power off; if the guest stays up, Packer hits shutdown_timeout — force shutdown after a short grace period.
+Start-Process -FilePath 'shutdown.exe' -ArgumentList @('/s', '/t', '120', '/f') -NoNewWindow

@@ -36,6 +36,9 @@ copy_if_exists /Windows/Panther/configure-oobe-locale.log configure-oobe-locale.
 copy_if_exists /Windows/Panther/unattend.xml panther-unattend.xml
 copy_if_exists /Windows/Panther/setuperr.log panther-setuperr.log
 copy_if_exists /Windows/Panther/setupact.log panther-setupact.log
+copy_if_exists /Windows/System32/Sysprep/Panther/setuperr.log sysprep-setuperr.log
+copy_if_exists /Windows/System32/Sysprep/Panther/setupact.log sysprep-setupact.log
+copy_if_exists /ProgramData/GoldenImage/sysprep-oobe.xml golden-sysprep-oobe.xml
 copy_if_exists /Windows/Temp/configure-oobe-locale.log temp-configure-oobe-locale.log
 
 if [[ -f "$OUT_DIR/panther-unattend.xml" ]] && grep -q 'pass="windowsPE"' "$OUT_DIR/panther-unattend.xml" 2>/dev/null; then
