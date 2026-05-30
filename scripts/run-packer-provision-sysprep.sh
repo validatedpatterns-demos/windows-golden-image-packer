@@ -32,9 +32,15 @@ fi
 [[ -n "$VERSION" ]] || { echo "ERROR: could not infer VERSION from BASE_IMAGE" >&2; exit 1; }
 
 PACKER_DIR="$ROOT/packer"
-VAR_FILE="${VAR_FILE:-$ROOT/packer/build.pkrvars.hcl}"
-VAR_FILE_FLAG=""
-[[ -f "$VAR_FILE" ]] && VAR_FILE_FLAG="-var-file=$VAR_FILE"
+VAR_FILE="${VAR_FILE:-build.pkrvars.hcl}"
+if [[ "$VAR_FILE" != /* ]]; then
+  VAR_FILE="$ROOT/$VAR_FILE"
+fi
+[[ -f "$VAR_FILE" ]] || {
+  echo "Var file not found: $VAR_FILE (copy example.pkrvars.hcl to build.pkrvars.hcl)" >&2
+  exit 1
+}
+VAR_FILE_FLAG="-var-file=$VAR_FILE"
 PACKER_ON_ERROR="${PACKER_ON_ERROR:-abort}"
 WINDOWS_EDITION="${WINDOWS_EDITION:-Standard}"
 WORK_DIR="$STAGING/work"
@@ -48,7 +54,7 @@ echo "  Prep disk: $BASE_IMAGE"
 echo ""
 
 cd "$PACKER_DIR"
-packer build -force -on-error="$PACKER_ON_ERROR" $VAR_FILE_FLAG \
+packer build -force -on-error="$PACKER_ON_ERROR" "$VAR_FILE_FLAG" \
   -var "windows_version=$VERSION" \
   -var "windows_edition=$WINDOWS_EDITION" \
   -var "base_image_path=$BASE_IMAGE" \
