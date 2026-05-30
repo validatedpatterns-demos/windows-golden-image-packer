@@ -53,6 +53,16 @@ function Stop-EdgeForSysprep {
     }
 }
 
+function Get-EdgeStableProvisionedPackages {
+    @(
+        Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
+            Where-Object {
+                (Test-EdgeStableAppxName -Name $_.DisplayName) -or
+                (Test-EdgeStableAppxName -Name $_.PackageName)
+            }
+    )
+}
+
 function Get-EdgeStablePackageFolder {
     $roots = @(
         (Join-Path $env:ProgramFiles 'WindowsApps')
@@ -147,33 +157,114 @@ function Find-StagedEdgeEnterpriseMsi {
     return $null
 }
 
-function Install-EdgeStableIfMissing {
-    $existing = Get-EdgeStablePackageFolder
-    if ($existing) {
-        return $existing
+function Resolve-EdgeEnterpriseMsiPath {
+    $msiPath = Join-Path $env:TEMP 'MicrosoftEdgeEnterpriseX64.msi'
+    if (Test-Path -LiteralPath $msiPath) {
+        return $msiPath
     }
 
-    $msiPath = Join-Path $env:TEMP 'MicrosoftEdgeEnterpriseX64.msi'
     $staged = Find-StagedEdgeEnterpriseMsi
     if ($staged) {
         Write-Host "Using staged Edge enterprise MSI: $staged"
         Copy-Item -LiteralPath $staged -Destination $msiPath -Force
-    }
-    else {
-        $url = Get-EdgeEnterpriseMsiUrl
-        Write-Host "Downloading Edge enterprise MSI: $url"
-        Invoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing
+        return $msiPath
     }
 
-    if (-not (Test-Path -LiteralPath $msiPath)) {
-        throw "Edge enterprise MSI not found at $msiPath"
+    $url = Get-EdgeEnterpriseMsiUrl
+    Write-Host "Downloading Edge enterprise MSI: $url"
+    Invoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing
+    return $msiPath
+}
+
+function Expand-EdgeEnterpriseMsi {
+    param(
+        [string]$MsiPath,
+        [string]$Dest
+    )
+
+    if (Test-Path -LiteralPath $Dest) {
+        Remove-Item -LiteralPath $Dest -Recurse -Force -ErrorAction SilentlyContinue
     }
+    New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+
+    Write-Host "Extracting Edge enterprise MSI: $MsiPath -> $Dest"
+    $args = @('/a', $MsiPath, '/qn', "TARGETDIR=$Dest")
+    $proc = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList $args -Wait -PassThru -NoNewWindow
+    $exitCode = $proc.ExitCode
+    if ($null -ne $exitCode -and $exitCode -notin 0, 3010, 1641) {
+        throw "Edge MSI administrative install exited with code $exitCode"
+    }
+}
+
+function Find-EdgeEnterpriseSetupExe {
+    param([string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return $null
+    }
+
+    $candidates = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Length -gt 40MB })
+
+    if (-not $candidates) {
+        return $null
+    }
+
+    $preferred = @(
+        $candidates | Where-Object { $_.Name -match 'MicrosoftEdge|EdgeInstaller|setup' } | Sort-Object Length -Descending
+        $candidates | Sort-Object Length -Descending
+    ) | Select-Object -First 1
+
+    return $preferred.FullName
+}
+
+function Find-EdgeAppxBundleInTree {
+    param([string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return $null
+    }
+
+    $patterns = @('*.appxbundle', '*.msixbundle', '*.appx', '*.msix')
+    $candidates = @()
+    foreach ($pattern in $patterns) {
+        $candidates += @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)
+    }
+    if (-not $candidates) {
+        return $null
+    }
+
+    $preferred = @(
+        $candidates | Where-Object { $_.Name -match 'x64|amd64' } | Sort-Object FullName -Descending
+        $candidates | Where-Object { $_.Name -match 'neutral' } | Sort-Object FullName -Descending
+        $candidates | Sort-Object FullName -Descending
+    ) | Select-Object -First 1
+
+    return $preferred.FullName
+}
+
+function Get-EdgeAppxBundleSearchRoots {
+    param([string[]]$ExtraRoots = @())
+
+    $roots = @(
+        (Join-Path $env:TEMP 'edge-msi-admin')
+        (Join-Path $env:ProgramFiles 'Microsoft\EdgeUpdate\Download')
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate\Download')
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\EdgeUpdate\Download')
+    )
+    $roots += $ExtraRoots
+    return @($roots | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Install-EdgeEnterpriseMsiDirect {
+    param([string]$MsiPath)
 
     $logPath = Join-Path $env:TEMP 'edge-enterprise-install.log'
-    Write-Host 'Installing Edge enterprise MSI silently (x64, no launch)...'
+    Write-Host 'Installing Edge enterprise MSI directly (fallback)...'
     $msiArgs = @(
-        '/i', $msiPath,
+        '/i', $MsiPath,
         '/qn', '/norestart',
+        'ALLUSERS=1',
         'DONOTLAUNCHEDGE=true',
         'DONOTCREATEDESKTOPSHORTCUT=true',
         'DONOTCREATETASKBARSHORTCUT=true',
@@ -184,43 +275,185 @@ function Install-EdgeStableIfMissing {
     if ($null -ne $exitCode -and $exitCode -notin 0, 3010, 1641) {
         throw "Edge MSI install exited with code $exitCode (see $logPath)"
     }
+}
 
-    $deadline = (Get-Date).AddMinutes(3)
+function Install-EdgeEnterpriseFromMsi {
+    param([string]$MsiPath)
+
+    $extractRoot = Join-Path $env:TEMP 'edge-msi-admin'
+    Expand-EdgeEnterpriseMsi -MsiPath $MsiPath -Dest $extractRoot
+
+    $setup = Find-EdgeEnterpriseSetupExe -Root $extractRoot
+    if ($setup) {
+        Write-Host "Installing Edge from extracted enterprise setup: $setup"
+        $setupArgs = @(
+            '/silent',
+            '/install',
+            '/installsource=enterprisemsi',
+            '/system-level'
+        )
+        $proc = Start-Process -FilePath $setup -ArgumentList $setupArgs -Wait -PassThru -NoNewWindow
+        $exitCode = $proc.ExitCode
+        if ($null -ne $exitCode -and $exitCode -notin 0, 3010, 1641) {
+            throw "Edge enterprise setup exited with code $exitCode"
+        }
+        return
+    }
+
+    Write-Warning 'Edge setup.exe not found in MSI extract; falling back to msiexec /i'
+    Install-EdgeEnterpriseMsiDirect -MsiPath $MsiPath
+}
+
+function Wait-EdgeStableProvisioned {
+    param([int]$TimeoutSeconds = 180)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        $folder = Get-EdgeStablePackageFolder
-        if ($folder) {
-            break
+        if (Get-EdgeStableProvisionedPackages) {
+            return $true
         }
         Start-Sleep -Seconds 5
     } while ((Get-Date) -lt $deadline)
-
-    if (-not $folder) {
-        throw "Edge MSI finished but Microsoft.MicrosoftEdge.Stable was not found under Program Files\WindowsApps (see $logPath)"
-    }
-    Write-Host "Edge package folder: $($folder.FullName)"
-    return $folder
+    return $false
 }
 
-function Add-EdgeStableProvisioning {
-    param([System.IO.DirectoryInfo]$Folder)
+function Add-EdgeStableProvisioningFromBundle {
+    param([string]$BundlePath)
 
-    if (-not (Test-Path -LiteralPath (Join-Path $Folder.FullName 'AppxManifest.xml'))) {
-        throw "Edge folder missing AppxManifest.xml: $($Folder.FullName)"
+    if (-not (Test-Path -LiteralPath $BundlePath)) {
+        throw "Edge AppX bundle not found: $BundlePath"
     }
 
-    Write-Host "Provisioning Edge for all users: $($Folder.Name)"
-    Add-AppxProvisionedPackage -Online -FolderPath $Folder.FullName -SkipLicense -ErrorAction Stop | Out-Null
+    Write-Host "Provisioning Edge for all users from bundle: $BundlePath"
+    try {
+        Add-AppxProvisionedPackage -Online -PackagePath $BundlePath -SkipLicense -ErrorAction Stop | Out-Null
+        return
+    }
+    catch {
+        Write-Warning "Add-AppxProvisionedPackage failed: $($_.Exception.Message)"
+    }
+
+    $dism = Join-Path $env:SystemRoot 'System32\dism.exe'
+    Write-Host "Trying DISM Add-ProvisionedAppxPackage for $BundlePath"
+    $dismArgs = @(
+        '/Online',
+        '/Add-ProvisionedAppxPackage',
+        "/PackagePath:$BundlePath",
+        '/SkipLicense',
+        '/Region:all'
+    )
+    $proc = Start-Process -FilePath $dism -ArgumentList $dismArgs -Wait -PassThru -NoNewWindow
+    $exitCode = $proc.ExitCode
+    if ($null -ne $exitCode -and $exitCode -ne 0) {
+        throw "DISM Add-ProvisionedAppxPackage exited with code $exitCode for $BundlePath"
+    }
+}
+
+function Test-EdgeWin32Installed {
+    foreach ($path in @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+        )) {
+        if (Test-Path -LiteralPath $path) {
+            return $path
+        }
+    }
+    return $null
+}
+
+function Remove-EdgePerUserRegistrationsIfPresent {
+    $userPkgs = @(
+        Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Where-Object { Test-EdgeAppxName -Name $_.Name }
+    )
+    if (-not $userPkgs) {
+        return
+    }
+    Remove-EdgeUserRegistrations
+}
+
+function Add-EdgeStableProvisioningIfNeeded {
+    param([string]$MsiPath)
+
+    if (Get-EdgeStableProvisionedPackages) {
+        Write-Host 'Edge Stable already provisioned'
+        return $true
+    }
+
+    $searchRoots = Get-EdgeAppxBundleSearchRoots
+    foreach ($root in $searchRoots) {
+        $bundle = Find-EdgeAppxBundleInTree -Root $root
+        if ($bundle) {
+            Add-EdgeStableProvisioningFromBundle -BundlePath $bundle
+            if (Get-EdgeStableProvisionedPackages) {
+                return $true
+            }
+        }
+    }
+
+    if (Invoke-EdgeUpdateSystemInstall) {
+        Write-Host 'EdgeUpdate system install provisioned Stable'
+        return $true
+    }
+
+    Write-Warning @(
+        'Edge AppX provisioning was not available on this image (common on Windows Server).'
+        'Will rely on Win32 Edge install if present.'
+        "MSI path: $MsiPath"
+    ) -join ' '
+    return $false
+}
+
+function Get-EdgeSysprepDiagnostics {
+    $prov = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { Test-EdgeAppxName -Name $_.DisplayName })
+    $user = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Where-Object { Test-EdgeAppxName -Name $_.Name })
+    $win32 = Test-EdgeWin32Installed
+
+    $lines = @('Provisioned Edge packages:')
+    if ($prov) {
+        $lines += @($prov | ForEach-Object { "  $($_.DisplayName)" })
+    }
+    else {
+        $lines += '  (none)'
+    }
+
+    $lines += 'Per-user Edge packages:'
+    if ($user) {
+        $lines += @($user | ForEach-Object { "  $($_.PackageFullName)" })
+    }
+    else {
+        $lines += '  (none)'
+    }
+
+    $lines += 'Win32 Edge binary:'
+    if ($win32) {
+        $lines += "  $win32"
+    }
+    else {
+        $lines += '  (none)'
+    }
+
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Invoke-EdgeUpdateSystemInstall {
+    $updateExe = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe'
+    if (-not (Test-Path -LiteralPath $updateExe)) {
+        return $false
+    }
+
+    Write-Host "Triggering EdgeUpdate system install: $updateExe"
+    $updateArgs = '/silent /install appguid={56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}&appname=Microsoft%20Edge&needsadmin=True'
+    $proc = Start-Process -FilePath $updateExe -ArgumentList $updateArgs -Wait -PassThru -NoNewWindow
+    $exitCode = $proc.ExitCode
+    if ($null -ne $exitCode -and $exitCode -notin 0, 3010, 1641) {
+        Write-Warning "EdgeUpdate install exited with code $exitCode"
+    }
+
+    Start-Sleep -Seconds 15
+    return [bool](Get-EdgeStableProvisionedPackages)
 }
 
 function Test-EdgeSysprepReady {
-    $provisioned = @(
-        Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
-            Where-Object { Test-EdgeStableAppxName -Name $_.DisplayName }
-    )
-    if (-not $provisioned) {
-        return $false, 'Microsoft.MicrosoftEdge.Stable is not provisioned for all users'
-    }
-
     $userStable = @(
         Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
             Where-Object { Test-EdgeStableAppxName -Name $_.Name }
@@ -241,7 +474,17 @@ function Test-EdgeSysprepReady {
         return $false, "Legacy Edge packages still registered per-user: $names"
     }
 
-    return $true, "Edge Stable provisioned ($($provisioned[0].DisplayName)); no per-user Edge registrations"
+    $provisioned = Get-EdgeStableProvisionedPackages
+    if ($provisioned) {
+        return $true, "Edge Stable provisioned ($($provisioned[0].DisplayName)); no per-user Edge registrations"
+    }
+
+    $win32 = Test-EdgeWin32Installed
+    if ($win32) {
+        return $true, "Edge Win32 installed ($win32); no AppX registrations (sysprep-safe on Server)"
+    }
+
+    return $false, 'Edge not installed (no Win32 msedge.exe and no provisioned AppX)'
 }
 
 function Ensure-EdgeAppxForSysprep {
@@ -256,19 +499,40 @@ function Ensure-EdgeAppxForSysprep {
 
     Write-Host "Edge sysprep state needs repair: $readyMsg"
 
-    Remove-EdgeUserRegistrations
-    Remove-EdgeProvisioning
-    Remove-EdgeUserRegistrations
+    Remove-EdgePerUserRegistrationsIfPresent
 
-    $folder = Install-EdgeStableIfMissing
-    Add-EdgeStableProvisioning -Folder $folder
+    $ready, $readyMsg = Test-EdgeSysprepReady
+    if ($ready) {
+        Write-Host $readyMsg
+        Stop-EdgeForSysprep
+        return
+    }
 
-    # Installer or provisioning can register Edge for the current admin profile.
-    Remove-EdgeUserRegistrations
+    $provisioned = Get-EdgeStableProvisionedPackages
+    $win32 = Test-EdgeWin32Installed
+    if (-not $provisioned -and -not $win32) {
+        $msiPath = Resolve-EdgeEnterpriseMsiPath
+        Install-EdgeEnterpriseFromMsi -MsiPath $msiPath
+
+        if (-not (Wait-EdgeStableProvisioned)) {
+            Write-Host 'Edge AppX auto-provision not detected; trying optional AppX bundle provisioning'
+            Add-EdgeStableProvisioningIfNeeded -MsiPath $msiPath | Out-Null
+        }
+        else {
+            Write-Host 'Edge setup provisioned Stable AppX for all users'
+        }
+    }
+    elseif (-not $provisioned -and $win32) {
+        Write-Host "Keeping existing Win32 Edge install: $win32"
+    }
+
+    # Only strip per-user AppX drift. Do not deprovision a working AppX catalog.
+    Remove-EdgePerUserRegistrationsIfPresent
 
     $ready, $readyMsg = Test-EdgeSysprepReady
     if (-not $ready) {
-        throw "Edge not sysprep-ready after provisioning: $readyMsg"
+        $diag = Get-EdgeSysprepDiagnostics
+        throw "Edge not sysprep-ready after provisioning: $readyMsg`n$diag"
     }
 
     Write-Host $readyMsg
