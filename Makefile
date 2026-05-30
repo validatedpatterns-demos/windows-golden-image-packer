@@ -153,6 +153,7 @@ build-version-uefi:
 		-var base_image_path=$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
 		$(PACKER_ONLY_PROVISION_MBR) .; \
+	cd $(CURDIR); \
 	prep_disk="$$(./scripts/stage-provision-prep-disk.sh "$$staging" "$(VERSION)" "$$edition_lc")"; \
 	echo ""; \
 	echo "=== Phase 3/3: OVMF sysprep (BCD generalize requires UEFI firmware) ==="; \
@@ -222,6 +223,7 @@ build-provision-only: stage-virtio init
 	    -var windows_edition=$(WINDOWS_EDITION) \
 	    $$prov_args \
 	    $$only .; \
+	  cd $(CURDIR); \
 	  edition_lc="$$(echo '$(WINDOWS_EDITION)' | tr '[:upper:]' '[:lower:]')"; \
 	  prep_disk="$$(./scripts/stage-provision-prep-disk.sh "$$staging_dir" "$$version" "$$edition_lc")"; \
 	  ./scripts/run-packer-provision-sysprep.sh "$$prep_disk" "$$staging_dir" "$$version"; \
