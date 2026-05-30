@@ -90,6 +90,7 @@ Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-insta
 
 | `unsupported bus type 'sata'` on provision | Packer QEMU uses `-drive if=sata`, which q35 rejects. Fixed: provision pass uses `provision_disk_interface=ide` (default). Update and retry. |
 
+| `Disk ... is already in use by other guests ['win-uefi-install-2022']` | Stale **virt-install** domain still references the install qcow2 (common after Ctrl+C). Run **`make clean`** (uses `virsh undefine --nvram` for OVMF domains). Manual: `virsh --connect qemu:///session destroy win-uefi-install-2022; virsh --connect qemu:///session undefine win-uefi-install-2022 --nvram` |
 | `permission denied` opening `packer-win*-install.qcow2` on provision | Usually an **old** install disk left as `nobody:nobody` mode `0600` from `qemu:///system` before ACL/session defaults. **New builds** default to `qemu:///session` (disk stays yours) or set POSIX ACLs before system virt-install. One-time fix: `chown $USER:$USER output/.packer-2022/packer-win2022-standard-install.qcow2 && chmod u+rw ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. Ensure `kvm` group membership (`groups`) and `dnf install acl` if you force `LIBVIRT_CONNECT=qemu:///system`. |
 
 ## When to give up and reinstall

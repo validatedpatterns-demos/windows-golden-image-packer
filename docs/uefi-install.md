@@ -12,7 +12,7 @@ Prerequisites: `virt-install`, `xorriso`, **`edk2-ovmf`** (4M OVMF for q35), **`
 
 The install script logs `Using OVMF: CODE=...` — on Fedora this should be **`OVMF_CODE_4M.qcow2`**, not `OVMF_CODE.fd` (2M often fails to boot on `machine q35`).
 
-**Important:** `make clean` and the UEFI install script only **undefine** libvirt domains; they do **not** use `virsh undefine --remove-all-storage`, because that can delete host files attached as `--cdrom` (your Windows ISO under `~/iso/`). Install disks under `output/.packer-*` are removed by `make clean` via `rm`, not libvirt.
+**Important:** `make clean` and the UEFI install script **undefine** libvirt domains with **`virsh undefine --nvram`** when OVMF NVRAM is present (plain `undefine` leaves the domain defined and keeps install qcow2 locked). They do **not** use `virsh undefine --remove-all-storage`, because that can delete host files attached as `--cdrom` (your Windows ISO under `~/iso/`). Install disks under `output/.packer-*` are removed by `make clean` via `rm`, not libvirt.
 
 ```bash
 make stage-virtio

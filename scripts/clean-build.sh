@@ -16,7 +16,7 @@ KILL_WAIT="${KILL_WAIT:-3}"
 
 log() { printf '%s\n' "$*"; }
 
-# QEMU command lines for this project use -name packer-win{version}-{edition}
+# QEMU for Packer uses -name packer-win{version}-{edition}; virt-install uses win-uefi-install-* / boot-test-*.
 collect_packer_qemu_pids() {
   local pids=()
   local line pid
@@ -27,7 +27,7 @@ collect_packer_qemu_pids() {
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if [[ "$line" =~ qemu-system ]] && [[ "$line" =~ packer-win ]]; then
+    if [[ "$line" =~ qemu-system ]] && [[ "$line" =~ packer-win|win-uefi-install|boot-test ]]; then
       pid="${line%% *}"
       [[ "$pid" =~ ^[0-9]+$ ]] && pids+=("$pid")
     fi
@@ -47,7 +47,7 @@ stop_qemu() {
   fi
 
   log "Stopping Packer QEMU process(es):"
-  pgrep -af 'qemu-system' 2>/dev/null | grep 'packer-win' || true
+  pgrep -af 'qemu-system' 2>/dev/null | grep -E 'packer-win|win-uefi-install|boot-test' || true
 
   while read -r pid; do
     [[ -z "$pid" ]] && continue
@@ -114,7 +114,10 @@ remove_artifacts() {
 
 clean_libvirt() {
   log "Removing libvirt domains from this project (virt-install / boot-test)..."
-  libvirt_cleanup_project_domains 0
+  if ! libvirt_cleanup_project_domains 0; then
+    log "Warning: one or more libvirt domains could not be removed (see errors above)." >&2
+    return 1
+  fi
   libvirt_cleanup_boot_test_workdirs
   log "Libvirt cleanup done."
 }

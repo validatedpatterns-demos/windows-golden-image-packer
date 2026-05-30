@@ -9,10 +9,18 @@ source "$LIBVIRT_CLEANUP_ROOT/scripts/libvirt-vm-disk.sh"
 
 libvirt_cleanup_connects() {
   local primary="${LIBVIRT_CONNECT:-$(libvirt_default_connect)}"
-  printf '%s\n' "$primary"
-  if [[ "$primary" != "qemu:///session" ]]; then
-    printf '%s\n' qemu:///session
-  fi
+  local -a connects=()
+  local c
+
+  for c in "$primary" qemu:///session qemu:///system; do
+    [[ -z "$c" ]] && continue
+    case " ${connects[*]} " in
+      *" $c "*) continue ;;
+    esac
+    connects+=("$c")
+  done
+
+  printf '%s\n' "${connects[@]}"
 }
 
 # Returns 0 if the domain name belongs to this project.
@@ -38,8 +46,19 @@ libvirt_destroy_domain() {
 
   echo "Removing libvirt domain $name ($connect)" >&2
   virsh --connect "$connect" destroy "$name" 2>/dev/null || true
-  # Default: undefine only. Project qcow2 overlays are removed by clean-build.sh / boot-test scripts.
-  virsh --connect "$connect" undefine "$name" 2>/dev/null || true
+  # UEFI/OVMF domains keep NVRAM; plain undefine fails with "cannot undefine domain with nvram".
+  if ! virsh --connect "$connect" undefine "$name" --nvram 2>/dev/null; then
+    virsh --connect "$connect" undefine "$name" --managed-save --nvram 2>/dev/null || \
+      virsh --connect "$connect" undefine "$name" 2>/dev/null || true
+  fi
+  if virsh --connect "$connect" dominfo "$name" &>/dev/null; then
+    echo "ERROR: failed to undefine libvirt domain $name on $connect (disk may stay locked)." >&2
+    virsh --connect "$connect" dominfo "$name" >&2 || true
+    return 1
+  fi
+
+  # Orphan session NVRAM from OVMF installs (undefine --nvram usually removes it).
+  rm -f "${HOME}/.config/libvirt/qemu/nvram/${name}_VARS.qcow2" 2>/dev/null || true
   if [[ "$remove_storage" == 1 ]]; then
     echo "WARN: remove_storage=1 is unsafe if install media was attached via --cdrom; use rm on known paths instead." >&2
   fi
@@ -48,7 +67,7 @@ libvirt_destroy_domain() {
 # Args: [remove_storage: 0|1]
 libvirt_cleanup_project_domains() {
   local remove_storage="${1:-0}"
-  local connect name
+  local connect name failed=0
 
   if ! command -v virsh >/dev/null 2>&1; then
     echo "virsh not found; skipping libvirt cleanup" >&2
@@ -65,10 +84,11 @@ libvirt_cleanup_project_domains() {
     for name in "${names[@]}"; do
       [[ -z "$name" ]] && continue
       if libvirt_domain_is_project "$name"; then
-        libvirt_destroy_domain "$connect" "$name" "$remove_storage"
+        libvirt_destroy_domain "$connect" "$name" "$remove_storage" || failed=1
       fi
     done
   done < <(libvirt_cleanup_connects)
+  return "${failed:-0}"
 }
 
 # Remove boot-test overlay workdirs (default ~/VirtualMachines/boot-test.*).

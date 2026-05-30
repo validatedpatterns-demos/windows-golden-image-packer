@@ -99,6 +99,10 @@ rm -f "$STAGING_DIR/provision-drivers.iso" "$STAGING_DIR/windows-uefi-install.is
   "$STAGING_DIR/unattend-usb.img"
 
 libvirt_destroy_domain "$LIBVIRT_CONNECT" "$VM_NAME" 0
+if virsh --connect "$LIBVIRT_CONNECT" dominfo "$VM_NAME" &>/dev/null; then
+  echo "ERROR: libvirt domain $VM_NAME still exists; run: make clean" >&2
+  exit 1
+fi
 if libvirt_uses_system_connect "$LIBVIRT_CONNECT"; then
   rm -f "/var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.qcow2" 2>/dev/null || true
 fi
