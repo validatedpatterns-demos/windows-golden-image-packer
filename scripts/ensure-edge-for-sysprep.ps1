@@ -94,29 +94,108 @@ function Remove-EdgeProvisioning {
     }
 }
 
+function Get-EdgeEnterpriseMsiUrl {
+    $api = 'https://edgeupdates.microsoft.com/api/products?channel=Stable&platform=Windows&arch=x64'
+    Write-Host "Resolving latest Edge enterprise MSI from $api"
+    $payload = Invoke-RestMethod -Uri $api -UseBasicParsing -ErrorAction Stop
+
+    $release = @(
+        foreach ($product in @($payload)) {
+            foreach ($entry in @($product.Releases)) {
+                if ($entry.Platform -eq 'Windows' -and $entry.Architecture -eq 'x64') {
+                    $entry
+                }
+            }
+        }
+    ) | Select-Object -First 1
+
+    if (-not $release) {
+        throw 'Edge update API returned no Windows x64 release'
+    }
+
+    $msi = @($release.Artifacts | Where-Object { $_.ArtifactName -eq 'msi' } | Select-Object -First 1)
+    if (-not $msi -or -not $msi.Location) {
+        throw 'Edge update API returned no enterprise MSI artifact for Windows x64'
+    }
+
+    Write-Host "Edge enterprise MSI: version $($release.ProductVersion)"
+    return [string]$msi.Location
+}
+
+function Find-StagedEdgeEnterpriseMsi {
+    $name = 'MicrosoftEdgeEnterpriseX64.msi'
+    $roots = @(
+        'C:\Windows\Temp',
+        'C:\Windows\Temp\drivers',
+        'C:\Windows\Temp\virtio-drivers'
+    )
+
+    Get-Volume -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.DriveLetter } |
+        ForEach-Object {
+            $drive = "$($_.DriveLetter):"
+            $roots += $drive
+            $roots += (Join-Path $drive 'drivers')
+        }
+
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        $path = Join-Path $root $name
+        if (Test-Path -LiteralPath $path) {
+            return (Resolve-Path -LiteralPath $path).Path
+        }
+    }
+    return $null
+}
+
 function Install-EdgeStableIfMissing {
     $existing = Get-EdgeStablePackageFolder
     if ($existing) {
         return $existing
     }
 
-    $setup = Join-Path $env:TEMP 'MicrosoftEdgeEnterpriseSetup.exe'
-    $url = 'https://go.microsoft.com/fwlink/?linkid=2093438'
-    Write-Host "Downloading Edge installer: $url"
-    Invoke-WebRequest -Uri $url -OutFile $setup -UseBasicParsing
-
-    Write-Host 'Installing Edge silently (system-level)...'
-    $installArgs = @('/silent', '/install', '--system-level')
-    $proc = Start-Process -FilePath $setup -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
-    $exitCode = $proc.ExitCode
-    if ($null -ne $exitCode -and $exitCode -notin 0, 3010) {
-        throw "Edge installer exited with code $exitCode"
+    $msiPath = Join-Path $env:TEMP 'MicrosoftEdgeEnterpriseX64.msi'
+    $staged = Find-StagedEdgeEnterpriseMsi
+    if ($staged) {
+        Write-Host "Using staged Edge enterprise MSI: $staged"
+        Copy-Item -LiteralPath $staged -Destination $msiPath -Force
+    }
+    else {
+        $url = Get-EdgeEnterpriseMsiUrl
+        Write-Host "Downloading Edge enterprise MSI: $url"
+        Invoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing
     }
 
-    Start-Sleep -Seconds 10
-    $folder = Get-EdgeStablePackageFolder
+    if (-not (Test-Path -LiteralPath $msiPath)) {
+        throw "Edge enterprise MSI not found at $msiPath"
+    }
+
+    $logPath = Join-Path $env:TEMP 'edge-enterprise-install.log'
+    Write-Host 'Installing Edge enterprise MSI silently (x64, no launch)...'
+    $msiArgs = @(
+        '/i', $msiPath,
+        '/qn', '/norestart',
+        'DONOTLAUNCHEDGE=true',
+        'DONOTCREATEDESKTOPSHORTCUT=true',
+        'DONOTCREATETASKBARSHORTCUT=true',
+        '/L*v', $logPath
+    )
+    $proc = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru -NoNewWindow
+    $exitCode = $proc.ExitCode
+    if ($null -ne $exitCode -and $exitCode -notin 0, 3010, 1641) {
+        throw "Edge MSI install exited with code $exitCode (see $logPath)"
+    }
+
+    $deadline = (Get-Date).AddMinutes(3)
+    do {
+        $folder = Get-EdgeStablePackageFolder
+        if ($folder) {
+            break
+        }
+        Start-Sleep -Seconds 5
+    } while ((Get-Date) -lt $deadline)
+
     if (-not $folder) {
-        throw 'Edge installer finished but Microsoft.MicrosoftEdge.Stable was not found under Program Files\WindowsApps'
+        throw "Edge MSI finished but Microsoft.MicrosoftEdge.Stable was not found under Program Files\WindowsApps (see $logPath)"
     }
     Write-Host "Edge package folder: $($folder.FullName)"
     return $folder
