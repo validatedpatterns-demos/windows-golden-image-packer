@@ -4,8 +4,9 @@
 # Optional pass 2: boot an existing qcow2 and run provisioners + sysprep only.
 #
 # Two builds (pick with -only):
-#   windows-golden-provision-mbr  — SeaBIOS/pc for virt-install MBR install disks
-#   windows-golden-provision-gpt  — OVMF/q35 for GPT salvage / post-mbr2gpt recovery
+#   windows-golden-provision-mbr         — SeaBIOS/pc: VirtIO, mbr2gpt, prep (no sysprep)
+#   windows-golden-provision-gpt-sysprep — OVMF/q35: sysprep after MBR prep (required for BCD)
+#   windows-golden-provision-gpt         — OVMF/q35: full provision + sysprep on GPT salvage
 #
 # Usage:
 #   make build-provision-only VERSION=2022 BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2
@@ -43,8 +44,8 @@ source "qemu" "from_install_mbr" {
   winrm_use_ssl  = false
   winrm_port     = 5985
 
-  shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
-  shutdown_timeout = "45m"
+  shutdown_command = "shutdown /s /t 0 /f"
+  shutdown_timeout = "30m"
 }
 
 source "qemu" "from_install_gpt" {
@@ -84,7 +85,7 @@ source "qemu" "from_install_gpt" {
   winrm_port     = 5985
 
   shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
-  shutdown_timeout = "45m"
+  shutdown_timeout = "90m"
 }
 
 build {
@@ -143,8 +144,43 @@ build {
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
+    ]
+  }
+}
+
+build {
+  name    = "windows-golden-provision-gpt-sysprep"
+  sources = ["source.qemu.from_install_gpt"]
+
+  # Sysprep BCD generalize requires OVMF on a GPT disk (SeaBIOS + GPT fails with c0000452).
+  provisioner "file" {
+    destination = "C:/Windows/Temp/"
+    source      = "${path.root}/../scripts/"
+  }
+
+  provisioner "file" {
+    content     = local.sysprep_generalize_unattend
+    destination = "C:/Windows/Temp/sysprep-generalize.xml"
+  }
+
+  provisioner "file" {
+    content     = local.sysprep_oobe_unattend
+    destination = "C:/Windows/Temp/sysprep-oobe.xml"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../http/oobe-info-defaults.xml"
+    destination = "C:/Windows/Temp/oobe-info-defaults.xml"
+  }
+
+  provisioner "powershell" {
+    environment_vars = local.provision_env_vars
+    scripts          = [
+      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
+      "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
     ]
   }
 
@@ -207,6 +243,7 @@ build {
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
     ]

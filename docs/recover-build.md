@@ -78,14 +78,19 @@ make build-provision-only \
 
 | `make` target | Packer build id | Firmware during provision |
 |---------------|-----------------|---------------------------|
-| `make build` (`efi_boot=true`) | `windows-golden-provision-mbr` (install disk) or `windows-golden-provision-gpt` (GPT salvage) | SeaBIOS on MBR install, OVMF on GPT recovery |
+| `make build` (`efi_boot=true`) | `windows-golden-provision-mbr` then `windows-golden-provision-gpt-sysprep` | SeaBIOS for prep (mbr2gpt, VirtIO); OVMF for sysprep |
+| `make build-provision-sysprep-only` | `windows-golden-provision-gpt-sysprep` | OVMF only — resume after failed sysprep on GPT prep disk |
 | `make build` (`efi_boot=false`) | `windows-golden-image` | SeaBIOS (no `mbr2gpt` in current templates) |
 
 Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-install.md)).
 
+**Sysprep on SeaBIOS + GPT disk fails** (`SYSPRP BCD: Failed to get system partition`, `0x80073bc3`). After `mbr2gpt`, sysprep must run under OVMF. The MBR provision pass shuts down without sysprep; a second OVMF pass runs sysprep only.
+
+| `Timeout while waiting for machine to shut down` after sysprep on MBR pass | Sysprep failed on SeaBIOS (BCD generalize needs UEFI). Update templates and retry: `EXECUTE=1 make recover-provision VERSION=2022` (GPT work disk → sysprep-only), or copy work disk to `recovery/` and `make build-provision-sysprep-only BASE_IMAGE=...`. |
+
 | `unsupported bus type 'sata'` on provision | Packer QEMU uses `-drive if=sata`, which q35 rejects. Fixed: provision pass uses `provision_disk_interface=ide` (default). Update and retry. |
 
-| `permission denied` opening `packer-win*-install.qcow2` on provision | libvirt left the install disk as `nobody:nobody` mode `0600`. Fix: `sudo chown $USER:$USER output/.packer-2022/packer-win2022-standard-install.qcow2 && chmod u+rw ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. Future builds run `libvirt_fixup_disk_for_build_user` after install. |
+| `permission denied` opening `packer-win*-install.qcow2` on provision | Usually an **old** install disk left as `nobody:nobody` mode `0600` from `qemu:///system` before ACL/session defaults. **New builds** default to `qemu:///session` (disk stays yours) or set POSIX ACLs before system virt-install. One-time fix: `chown $USER:$USER output/.packer-2022/packer-win2022-standard-install.qcow2 && chmod u+rw ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. Ensure `kvm` group membership (`groups`) and `dnf install acl` if you force `LIBVIRT_CONNECT=qemu:///system`. |
 
 ## When to give up and reinstall
 

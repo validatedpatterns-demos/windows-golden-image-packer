@@ -169,7 +169,7 @@ try {
         throw "Missing $oobeUnattendPersistent (configure-oobe-locale.ps1 must run before sysprep)"
     }
 
-    foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc')) {
+    foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc', 'edgeupdate', 'edgeupdatem')) {
         $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq 'Running') {
             Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
@@ -179,7 +179,7 @@ try {
     Repair-UefiBootIfNeeded
 
     . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
-    Write-Host 'Running last-chance AppX cleanup before sysprep...'
+    Write-Host 'Ensuring Edge is provisioned for all users and stopping browser processes...'
     Remove-SysprepBlockingAppx
 
     $unattend = $generalizeUnattend
@@ -199,7 +199,9 @@ try {
         throw "sysprep.exe failed (exit $codeLabel). Diagnostics saved to $diagLog; extract with: make extract-sysprep-log IMAGE=<qcow2>"
     }
 
-    Write-Host 'sysprep.exe completed with /shutdown; waiting for guest power-off (do not schedule a second shutdown)'
+    Write-Host 'sysprep.exe completed successfully; forcing guest shutdown (sysprep /shutdown can leave the VM running under QEMU).'
+    Start-Process -FilePath "$env:SystemRoot\System32\shutdown.exe" -ArgumentList @('/s', '/t', '0', '/f') -NoNewWindow
+    Write-Host 'shutdown /s /t 0 /f issued; Packer will wait for power-off.'
 }
 catch {
     if (-not (Test-Path $diagLog)) {

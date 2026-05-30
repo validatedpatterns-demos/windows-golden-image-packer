@@ -54,7 +54,7 @@ source "qemu" "windows" {
   winrm_port     = 5985
 
   shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
-  shutdown_timeout = "45m"
+  shutdown_timeout = "90m"
 }
 
 build {
@@ -101,6 +101,7 @@ build {
       "${path.root}/../scripts/04-set-administrator-password.ps1",
       "${path.root}/../scripts/05-inject-ssh-keys.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",

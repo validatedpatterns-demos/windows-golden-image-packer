@@ -26,7 +26,7 @@ function Test-PendingReboot {
 }
 
 function Stop-UpdateServices {
-    foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc')) {
+    foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc', 'edgeupdate', 'edgeupdatem')) {
         $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq 'Running') {
             Write-Host "Stopping service $name"

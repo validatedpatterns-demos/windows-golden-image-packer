@@ -11,7 +11,8 @@
 # Profiles:
 #   full-uefi        Phase 1 virt-install + Phase 2 SeaBIOS provision + promote
 #   skip-install     Phase 2 SeaBIOS provision + promote (SKIP_INSTALL=1)
-#   provision-mbr    Phase 2 SeaBIOS provision only (make build-provision-only, MBR disk)
+#   provision-mbr         Phase 2 SeaBIOS prep + chained OVMF sysprep
+#   provision-gpt-sysprep OVMF sysprep only (after MBR prep)
 #   provision-gpt    Phase 2 OVMF provision only (GPT / recovery disk)
 #   recover-gpt      Copy work disk to recovery/ + provision-gpt
 #   recover-mbr      Copy work disk to recovery/ + provision-mbr
@@ -24,7 +25,7 @@ set -euo pipefail
 PROFILE="${1:-}"
 if [[ -z "$PROFILE" ]]; then
   echo "Usage: $0 PROFILE" >&2
-  echo "Profiles: full-uefi skip-install provision-mbr provision-gpt recover-gpt recover-mbr install-only" >&2
+  echo "Profiles: full-uefi skip-install provision-mbr provision-gpt provision-gpt-sysprep recover-gpt recover-mbr install-only" >&2
   exit 1
 fi
 
@@ -46,7 +47,9 @@ VirtIO drivers + guest reboot|5|10|20
 mbr2gpt + UEFI boot repair|3|8|15
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
-Sysprep + guest shutdown|10|18|45
+Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
+Phase 3: OVMF boot + UEFI BCD repair|3|8|15
+Sysprep + guest shutdown (OVMF)|10|18|45
 Finalize qcow2 + optimize|2|5|10
 Golden image promoted to output/|0|1|2
 EOF
@@ -59,7 +62,9 @@ VirtIO drivers + guest reboot|5|10|20
 mbr2gpt + UEFI boot repair|3|8|15
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
-Sysprep + guest shutdown|10|18|45
+Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
+Phase 3: OVMF boot + UEFI BCD repair|3|8|15
+Sysprep + guest shutdown (OVMF)|10|18|45
 Finalize qcow2 + optimize|2|5|10
 Golden image promoted to output/|0|1|2
 EOF
@@ -72,6 +77,17 @@ VirtIO drivers + guest reboot|5|10|20
 mbr2gpt + UEFI boot repair|3|8|15
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
+Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
+Phase 3: OVMF boot + UEFI BCD repair|3|8|15
+Sysprep + guest shutdown (OVMF)|10|18|45
+Finalize qcow2 + optimize|2|5|10
+EOF
+      ;;
+    provision-gpt-sysprep)
+      cat <<'EOF'
+Waiting for WinRM (OVMF boot)|5|15|45
+Upload sysprep scripts + unattend XML|1|3|8
+UEFI BCD repair (07-repair-uefi-boot)|1|4|10
 Sysprep + guest shutdown|10|18|45
 Finalize qcow2 + optimize|2|5|10
 EOF
@@ -92,11 +108,8 @@ EOF
       cat <<'EOF'
 Copy work disk to recovery/ (cp -a)|3|8|15
 Waiting for WinRM (OVMF boot)|5|15|45
-Upload scripts + VirtIO drivers to guest|2|5|15
-UEFI boot verify + mbr2gpt skip/repair|1|4|10
-Guest reboot (OVMF)|3|8|15
-VirtIO, QEMU-GA, OpenSSH, password, keys, locale|8|15|35
-Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
+Upload sysprep scripts + unattend XML|1|3|8
+UEFI BCD repair (07-repair-uefi-boot)|1|4|10
 Sysprep + guest shutdown|10|18|45
 Finalize qcow2 + optimize|2|5|10
 EOF
@@ -110,7 +123,9 @@ VirtIO drivers + guest reboot|5|10|20
 mbr2gpt + UEFI boot repair|3|8|15
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
-Sysprep + guest shutdown|10|18|45
+Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
+Phase 3: OVMF boot + UEFI BCD repair|3|8|15
+Sysprep + guest shutdown (OVMF)|10|18|45
 Finalize qcow2 + optimize|2|5|10
 EOF
       ;;

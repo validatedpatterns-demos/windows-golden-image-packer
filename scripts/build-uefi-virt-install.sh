@@ -64,7 +64,9 @@ AUTOUNATTEND_XML="$(mktemp)"
 PROVISION_ISO="$STAGING_DIR/provision.iso"
 UNATTEND_FLOPPY="$STAGING_DIR/unattend-floppy.img"
 VM_NAME="win-uefi-install-${VERSION}"
-LIBVIRT_CONNECT="${LIBVIRT_CONNECT:-qemu:///system}"
+LIBVIRT_CONNECT="${LIBVIRT_CONNECT:-$(libvirt_default_connect)}"
+
+libvirt_check_build_prereqs "$LIBVIRT_CONNECT"
 
 log() {
   # stdout so phase banners stay visible when make captures stderr from virt-install
@@ -97,16 +99,23 @@ rm -f "$STAGING_DIR/provision-drivers.iso" "$STAGING_DIR/windows-uefi-install.is
   "$STAGING_DIR/unattend-usb.img"
 
 libvirt_destroy_domain "$LIBVIRT_CONNECT" "$VM_NAME" 0
-rm -f "/var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.qcow2" 2>/dev/null || true
+if libvirt_uses_system_connect "$LIBVIRT_CONNECT"; then
+  rm -f "/var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.qcow2" 2>/dev/null || true
+fi
 
 rm -f "$DISK_PATH"
+if libvirt_uses_system_connect "$LIBVIRT_CONNECT"; then
+  qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
+  libvirt_prepare_install_disk_for_system "$DISK_PATH"
+  libvirt_disk_args "$DISK_PATH" sata ""
+else
+  libvirt_disk_args "$DISK_PATH" sata "${DISK_SIZE%G}"
+fi
 
 GRAPHICS=(--graphics vnc,listen=127.0.0.1)
 if [[ "$HEADLESS" == "true" ]]; then
   GRAPHICS=(--graphics none)
 fi
-
-libvirt_disk_args "$DISK_PATH" sata "${DISK_SIZE%G}"
 
 if [[ "$INSTALL_FIRMWARE" == "uefi" ]]; then
   libvirt_uefi_install_boot_args "$VAR_FILE" "$ROOT" || exit 1
@@ -125,6 +134,7 @@ log "Unattended Setup runs in the libvirt VM; this phase usually takes 30-60 min
 log "The golden image is still UEFI/GPT after Phase 2 (Packer mbr2gpt + virtio + sysprep)."
 log ""
 log "Starting Windows Server ${VERSION} install VM (${WINDOWS_EDITION})"
+log "  libvirt:          $LIBVIRT_CONNECT"
 log "  Install firmware: $INSTALL_FIRMWARE (SeaBIOS is normal; Packer converts to UEFI later)"
 log "  Machine:          $INSTALL_MACHINE"
 log "  Windows ISO:      $WINDOWS_ISO"

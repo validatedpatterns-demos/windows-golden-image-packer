@@ -4,9 +4,11 @@
 # Destroy/undefine libvirt domains created by this repo (virt-install UEFI install, boot-test).
 # shellcheck disable=SC2034
 LIBVIRT_CLEANUP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/libvirt-vm-disk.sh
+source "$LIBVIRT_CLEANUP_ROOT/scripts/libvirt-vm-disk.sh"
 
 libvirt_cleanup_connects() {
-  local primary="${LIBVIRT_CONNECT:-qemu:///system}"
+  local primary="${LIBVIRT_CONNECT:-$(libvirt_default_connect)}"
   printf '%s\n' "$primary"
   if [[ "$primary" != "qemu:///session" ]]; then
     printf '%s\n' qemu:///session

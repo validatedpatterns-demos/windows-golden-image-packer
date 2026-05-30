@@ -27,11 +27,16 @@ On a Linux build host with KVM:
 
 ```bash
 # Fedora/RHEL example
-sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm
+sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm acl
+
+# One-time: allow KVM for your user (session libvirt default — install disks stay owned by you)
+sudo usermod -aG kvm "$USER"   # log out and back in before make build
 
 # Download virtio-win (optional helper)
 make download-virtio
 ```
+
+Phase 1 virt-install defaults to **`qemu:///session`** when available so the install qcow2 is not left as `nobody:nobody` (no sudo between Phase 1 and Packer). Override with `LIBVIRT_CONNECT=qemu:///system` if you prefer system libvirt; ACLs are applied automatically before install.
 
 ## Quick start
 
@@ -201,6 +206,8 @@ example.pkrvars.hcl
 - **Post-processor: No qcow2 found in ./output**: the QEMU builder writes `output_directory/<vm_name>` **without** a `.qcow2` suffix (e.g. `packer-win2022-standard`). The post-processor now finds that file and renames it to `windows-server-*-*.qcow2`. If a long build already finished, recover with: `mv packer/output/packer-win2022-standard output/windows-server-2022-standard.qcow2` (adjust names/paths). Use `output_directory = "../output"` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`).
 
 - **Interrupted or failed build**: see **[docs/recover-build.md](docs/recover-build.md)**. Quick: `make recover-provision VERSION=2022` then `EXECUTE=1 make recover-provision VERSION=2022`. Packer keeps disks under `output/.packer-*/` when `PACKER_ON_ERROR=abort` (Makefile default). **Do not** set `BASE_IMAGE` to a file under `work/` — Packer `-force` deletes it. After `mbr2gpt`, recover from the **work** disk (GPT), not the `-install` image (MBR).
+
+- **`permission denied` on `packer-win*-install.qcow2` before Phase 2**: an older build used `qemu:///system` without ACLs and left the disk as `nobody:nobody`. New builds default to **`qemu:///session`**. One-time: `chown $USER:$USER` the install qcow2, or re-run Phase 1. Ensure you are in the **`kvm`** group and logged in again after `usermod`.
 
 - **`stage-virtio` permission denied**: virtio-win ISO directories are often mode `555`. The script no longer `rm -rf`s them; it skips if drivers are already present, or `mv`s the old tree to `extras/virtio-win-staged.orphan.*` on refresh. If `mv` fails: `sudo chown -R $(whoami): extras/virtio-win-staged && chmod -R u+rwX extras/virtio-win-staged`.
 

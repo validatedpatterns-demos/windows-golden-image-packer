@@ -212,9 +212,11 @@ fi
 
 LAYOUT="$(disk_gpt_hint "$RECOMMENDED")"
 if [[ "$LAYOUT" == GPT ]]; then
-  FIRMWARE_MSG="OVMF/q35 (auto-detected GPT disk)"
+  FIRMWARE_MSG="OVMF/q35 sysprep-only (GPT prep disk; MBR prep already done)"
+  RECOVER_TARGET="build-provision-sysprep-only"
 else
-  FIRMWARE_MSG="SeaBIOS/pc (MBR install or pre-mbr2gpt work disk)"
+  FIRMWARE_MSG="SeaBIOS prep + chained OVMF sysprep"
+  RECOVER_TARGET="build-provision-only"
 fi
 
 RECOVERY_DIR="$STAGING/recovery"
@@ -222,14 +224,18 @@ SAFE_COPY="$RECOVERY_DIR/salvage-${VERSION}-${EDITION_LC}.qcow2"
 
 echo "Situation: $RECOMMENDED_REASON"
 echo "Source:    $RECOMMENDED ($LAYOUT)"
-echo "Action:    copy out of work/, then run provision-only ($FIRMWARE_MSG)."
+echo "Action:    copy out of work/, then run $RECOVER_TARGET ($FIRMWARE_MSG)."
 echo ""
 echo "  EXECUTE=1 make recover-provision VERSION=${VERSION}"
 echo ""
 echo "Manual steps:"
 echo "  mkdir -p $RECOVERY_DIR"
 echo "  cp -a '$RECOMMENDED' '$SAFE_COPY'"
-echo "  make build-provision-only VERSION=${VERSION} BASE_IMAGE='$SAFE_COPY'"
+if [[ "$LAYOUT" == GPT ]]; then
+  echo "  make build-provision-sysprep-only VERSION=${VERSION} BASE_IMAGE='$SAFE_COPY'"
+else
+  echo "  make build-provision-only VERSION=${VERSION} BASE_IMAGE='$SAFE_COPY'"
+fi
 echo ""
 
 if [[ "$EXECUTE" -ne 1 ]]; then
@@ -238,7 +244,7 @@ fi
 
 if [[ "$LAYOUT" == GPT ]]; then
   if [[ -f "$SAFE_COPY" ]]; then
-    schedule_profile=provision-gpt
+    schedule_profile=provision-gpt-sysprep
   else
     schedule_profile=recover-gpt
   fi
@@ -261,4 +267,5 @@ else
   cp -a "$RECOMMENDED" "$SAFE_COPY"
 fi
 
-exec make -C "$ROOT" build-provision-only VERSION="$VERSION" BASE_IMAGE="$SAFE_COPY"
+make -C "$ROOT" "$RECOVER_TARGET" VERSION="$VERSION" BASE_IMAGE="$SAFE_COPY"
+"$ROOT/scripts/promote-golden-output.sh" "$VERSION" ".packer-${VERSION}"

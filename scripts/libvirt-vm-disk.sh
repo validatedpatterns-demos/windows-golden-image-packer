@@ -203,6 +203,99 @@ libvirt_tpm_args() {
   printf '%s\n' "--tpm" "backend.type=emulator,backend.version=2.0,model=tpm-crb"
 }
 
+libvirt_qemu_user() {
+  local u
+  if [[ -r /etc/libvirt/qemu.conf ]]; then
+    u="$(awk -F= '/^[[:space:]]*user[[:space:]]*=/ {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+      gsub(/"/, "", $2)
+      if ($2 !~ /^\+/) { print $2; exit }
+    }' /etc/libvirt/qemu.conf)"
+  fi
+  if [[ -z "${u:-}" ]] || ! getent passwd "$u" &>/dev/null; then
+    u="qemu"
+  fi
+  echo "$u"
+}
+
+libvirt_uses_system_connect() {
+  local connect="${1:-${LIBVIRT_CONNECT:-qemu:///system}}"
+  [[ "$connect" == qemu://* && "$connect" != *session* ]]
+}
+
+# Prefer session libvirt so qcow2 under $HOME stays owned by the build user (no sudo chown).
+libvirt_default_connect() {
+  if [[ -n "${LIBVIRT_CONNECT:-}" ]]; then
+    echo "$LIBVIRT_CONNECT"
+    return 0
+  fi
+  if virsh --connect qemu:///session uri >/dev/null 2>&1; then
+    echo qemu:///session
+    return 0
+  fi
+  echo qemu:///system
+}
+
+libvirt_check_build_prereqs() {
+  local connect="${1:-$(libvirt_default_connect)}"
+  local user
+  user="$(id -un)"
+
+  if [[ ! -r /dev/kvm ]]; then
+    echo "ERROR: /dev/kvm is not readable for $user." >&2
+    echo "  One-time: sudo usermod -aG kvm $user  (then log out and back in)" >&2
+    return 1
+  fi
+
+  if libvirt_uses_system_connect "$connect"; then
+    if ! command -v setfacl >/dev/null 2>&1; then
+      echo "ERROR: $connect with disks under \$HOME needs POSIX ACLs (dnf install acl)." >&2
+      echo "  Or set LIBVIRT_CONNECT=qemu:///session to run install VMs as your user." >&2
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+libvirt_grant_qemu_traverse_parents() {
+  local qemu_user="$1" target="$2" dir
+  target="$(readlink -f "$target")"
+  if [[ -f "$target" ]]; then
+    dir="$(dirname "$target")"
+  else
+    dir="$target"
+  fi
+  while [[ -n "$dir" && "$dir" != "/" ]]; do
+    if ! setfacl -m "u:${qemu_user}:x" "$dir" 2>/dev/null; then
+      echo "Failed to grant $qemu_user traverse on $dir (install acl package?)" >&2
+      return 1
+    fi
+    dir="$(dirname "$dir")"
+  done
+}
+
+# Before qemu:///system virt-install: keep build-user rw after libvirt dynamic_ownership (nobody:nobody).
+libvirt_prepare_install_disk_for_system() {
+  local disk="$1"
+  local build_user qemu_user disk_dir
+  build_user="${USER:-$(id -un)}"
+  qemu_user="$(libvirt_qemu_user)"
+  disk="$(readlink -f "$disk")"
+  disk_dir="$(dirname "$disk")"
+
+  command -v setfacl >/dev/null 2>&1 || {
+    echo "ERROR: setfacl required for $LIBVIRT_CONNECT install disks under \$HOME." >&2
+    return 1
+  }
+
+  libvirt_grant_qemu_traverse_parents "$qemu_user" "$disk" || return 1
+  setfacl -m "u:${qemu_user}:rx" "$disk_dir" || return 1
+  setfacl -m "u:${qemu_user}:rw" "$disk" || return 1
+  setfacl -m "u:${build_user}:rw" "$disk" || return 1
+  echo "Prepared ACLs on install disk for $build_user and $qemu_user (no sudo needed after install)." >&2
+}
+
 # qemu:///system + dynamic_ownership often leaves qcow2 in $HOME as nobody:nobody mode 0600.
 # Packer (running as the build user) must read the install disk for pass 2.
 libvirt_fixup_disk_for_build_user() {
@@ -212,19 +305,13 @@ libvirt_fixup_disk_for_build_user() {
     return 0
   fi
 
-  local build_user="${SUDO_USER:-${USER:-$(id -un)}}"
+  local build_user="${USER:-$(id -un)}"
   local before
   before="$(stat -c '%U:%G %a' "$disk" 2>/dev/null || echo unknown)"
-  echo "Restoring install disk permissions for Packer (was $before): $disk" >&2
-
-  if sudo chown "$build_user:$build_user" "$disk" 2>/dev/null && sudo chmod u+rw "$disk" 2>/dev/null; then
-    return 0
-  fi
-  if chown "$build_user:$build_user" "$disk" 2>/dev/null && chmod u+rw "$disk" 2>/dev/null; then
-    return 0
-  fi
-
-  echo "ERROR: cannot read $disk (libvirt qemu user owns it)." >&2
-  echo "  sudo chown $build_user:$build_user '$disk' && chmod u+rw '$disk'" >&2
+  echo "ERROR: install disk not readable for Packer (was $before): $disk" >&2
+  echo "  Default is LIBVIRT_CONNECT=qemu:///session when available (disks stay yours)." >&2
+  echo "  For qemu:///system, rebuild after: dnf install acl  (ACLs are set before virt-install)." >&2
+  echo "  One-time fix for this file: chown $build_user:$build_user '$disk' && chmod u+rw '$disk'" >&2
+  echo "    (requires root if the file is owned by nobody/qemu)" >&2
   return 1
 }
