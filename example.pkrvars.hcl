@@ -50,6 +50,9 @@ efi_boot = true
 # Emulated TPM 2.0 (swtpm) on UEFI builds; disable only for hosts without swtpm.
 vtpm = true
 
+# OVMF sysprep pass (from_install_gpt): default false — matches boot-test and avoids first-OVMF boot loops.
+# provision_sysprep_vtpm = false
+
 # OVMF paths (optional; virt-install auto-picks a matching pair). On Fedora 44+ use 4M firmware
 # for q35 — do not point at 2M OVMF_CODE.fd alone or the VM may not boot:
 # ovmf_code_path = "/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2"

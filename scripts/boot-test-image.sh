@@ -2,34 +2,41 @@
 # SPDX-License-Identifier: Apache-2.0
 
 #!/usr/bin/env bash
-# Boot-test a golden qcow2 without modifying it (overlay disk + libvirt, virtio like CNV).
+# Boot-test a golden qcow2 without modifying it (overlay qcow2; backing stays read-only).
+#
+# UEFI (default when efi_boot=true): same QEMU launch as the OVMF sysprep Packer pass
+# (q35 + ich9-ahci + e1000 user netdev, no vTPM). SeaBIOS images use libvirt.
 #
 # Usage:
 #   boot-test-image.sh [options] [IMAGE.qcow2]
 #
 # Environment (defaults shown):
-#   BOOT_TEST_CONNECT=qemu:///system
-#   BOOT_TEST_FIRMWARE=uefi          # default: matches efi_boot in build.pkrvars.hcl (uefi for OpenShift)
+#   BOOT_TEST_METHOD=packer|libvirt   # default: packer for uefi, libvirt for bios
+#   BOOT_TEST_CONNECT=qemu:///system   # libvirt method only
+#   BOOT_TEST_FIRMWARE=uefi
 #   BOOT_TEST_MEMORY=8192
 #   BOOT_TEST_VCPUS=4
-#   BOOT_TEST_WAIT=120             # seconds VM must stay running before guest checks
-#   BOOT_TEST_GUEST_WAIT=600       # max seconds to wait for QEMU guest-agent IP
-#   BOOT_TEST_CHECK_GUEST=1        # 0 = only verify VM stays up; 1 = also require guest-agent address
-#   BOOT_TEST_GRAPHICS=vnc         # vnc or none
-#   BOOT_TEST_SHOW_CONSOLE=1       # 0 = do not launch virt-viewer
-#   BOOT_TEST_DISK_BUS=scsi        # UEFI default: virtio-scsi (OVMF does not boot virtio-blk)
+#   BOOT_TEST_WAIT=180
+#   BOOT_TEST_GUEST_WAIT=600
+#   BOOT_TEST_CHECK_GUEST=1        # packer: WinRM host port; libvirt: guest-agent IP
+#   BOOT_TEST_GRAPHICS=vnc
+#   BOOT_TEST_SHOW_CONSOLE=1
+#   BOOT_TEST_DISK_BUS=sata         # libvirt uefi only
 #   BOOT_TEST_KEEP_VM=0
 #   BOOT_TEST_KEEP_DISK=0
-#   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines   # overlay qcow2 directory (needs free space)
-#   VAR_FILE=build.pkrvars.hcl     # used for memory/vcpus when unset
+#   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines
+#   VAR_FILE=build.pkrvars.hcl
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 # shellcheck source=scripts/libvirt-vm-disk.sh
 source "$ROOT/scripts/libvirt-vm-disk.sh"
+# shellcheck source=scripts/packer-ovmf-sysprep-qemu.sh
+source "$ROOT/scripts/packer-ovmf-sysprep-qemu.sh"
 
 CONNECT="${BOOT_TEST_CONNECT:-qemu:///system}"
+METHOD="${BOOT_TEST_METHOD:-}"
 
 default_firmware() {
   local efi
@@ -54,6 +61,7 @@ WORK_BASE="${BOOT_TEST_WORK_DIR:-$HOME/VirtualMachines}"
 
 IMAGE=""
 VM_NAME=""
+DISK_BUS=""
 
 read_hcl() {
   local key="$1"
@@ -69,6 +77,7 @@ usage() {
   echo "  --image PATH       qcow2 to test (default: newest golden under output/)"
   echo "  --name NAME        libvirt domain name (default: boot-test-<image-basename>)"
   echo "  --firmware bios|uefi"
+  echo "  --method packer|libvirt   default: packer for uefi, libvirt for bios"
   echo "  --memory MB        --vcpus N"
   echo "  --wait SECONDS     --guest-wait SECONDS"
   echo "  --no-guest-check   skip QEMU guest-agent IP check"
@@ -86,6 +95,7 @@ while [[ $# -gt 0 ]]; do
     --image) IMAGE="$2"; shift 2 ;;
     --name) VM_NAME="$2"; shift 2 ;;
     --firmware) FIRMWARE="$2"; shift 2 ;;
+    --method) METHOD="$2"; shift 2 ;;
     --memory) export BOOT_TEST_MEMORY="$2"; shift 2 ;;
     --vcpus) export BOOT_TEST_VCPUS="$2"; shift 2 ;;
     --wait) WAIT="$2"; shift 2 ;;
@@ -154,8 +164,8 @@ case "$DISK_BUS" in
 esac
 
 if [[ "$FIRMWARE" == "uefi" ]]; then
-  golden_image_has_efi_partition "$IMAGE"
-  efi_rc=$?
+  efi_rc=0
+  golden_image_has_efi_partition "$IMAGE" || efi_rc=$?
   if [[ "$efi_rc" -eq 1 ]]; then
     echo "ERROR: $IMAGE has no EFI system partition but boot-test uses UEFI." >&2
     echo "Rebuild with efi_boot=true, or use --firmware bios for SeaBIOS images." >&2
@@ -177,6 +187,27 @@ VPUS="${BOOT_TEST_VCPUS:-$(read_hcl vm_cpus)}"
 MEMORY="${MEMORY:-8192}"
 VPUS="${VPUS:-4}"
 
+if [[ -z "$METHOD" ]]; then
+  if [[ "$FIRMWARE" == "uefi" ]]; then
+    METHOD=packer
+  else
+    METHOD=libvirt
+  fi
+fi
+
+case "$METHOD" in
+  packer|libvirt) ;;
+  *)
+    echo "Invalid --method: $METHOD (use packer or libvirt)" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$METHOD" == "packer" && "$FIRMWARE" != "uefi" ]]; then
+  echo "ERROR: BOOT_TEST_METHOD=packer requires --firmware uefi" >&2
+  exit 1
+fi
+
 if [[ -z "$VM_NAME" ]]; then
   base="$(basename "$IMAGE" .qcow2)"
   VM_NAME="boot-test-${base}"
@@ -184,10 +215,15 @@ fi
 
 WORK_DIR=""
 TEST_DISK=""
+QEMU_PID=""
 
 cleanup() {
   local rc=$?
-  if [[ "$KEEP_VM" != 1 && -n "$VM_NAME" ]]; then
+  if [[ "$METHOD" == "packer" && -n "$WORK_DIR" ]]; then
+    if [[ "$KEEP_VM" != 1 ]]; then
+      packer_ovmf_stop_qemu "$WORK_DIR" 2>/dev/null || true
+    fi
+  elif [[ "$KEEP_VM" != 1 && -n "$VM_NAME" ]]; then
     virsh --connect "$CONNECT" destroy "$VM_NAME" 2>/dev/null || true
     virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
   fi
@@ -263,6 +299,106 @@ grant_qemu_system_storage_access() {
   echo "Granted $qemu_user ACL access to overlay and backing file." >&2
 }
 
+ORIG_SIZE="$(stat -c%s "$IMAGE")"
+ORIG_MTIME="$(stat -c%Y "$IMAGE")"
+
+mkdir -p "$WORK_BASE"
+WORK_DIR="$(mktemp -d "$WORK_BASE/boot-test.XXXXXX")"
+TEST_DISK="$WORK_DIR/disk.qcow2"
+
+echo "Golden image (read-only backing): $IMAGE"
+echo "Test overlay:                  $TEST_DISK"
+echo "Method:                        $METHOD"
+echo "Firmware:                      $FIRMWARE"
+if [[ "$METHOD" == "libvirt" ]]; then
+  echo "libvirt:                       $CONNECT"
+  echo "Domain:                        $VM_NAME"
+  echo "Disk bus:                      $DISK_BUS"
+fi
+
+if [[ "$METHOD" == "packer" ]]; then
+  require_cmd qemu-system-x86_64 qemu-img stat python3
+  packer_ovmf_load_config "$VAR_FILE" "$ROOT" || exit 1
+  PACKER_OVMF_MEMORY="$MEMORY"
+  PACKER_OVMF_VCPUS="$VPUS"
+
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "[dry-run] packer_ovmf_prepare_workdir + qemu (OVMF sysprep pass: ide.0, qcow2 pflash, no vTPM)"
+    packer_ovmf_print_qemu_cmd "$WORK_DIR" "disk.qcow2" "$VM_NAME" 44 4228
+    exit 0
+  fi
+
+  packer_ovmf_prepare_workdir "$WORK_DIR" "$IMAGE" "disk.qcow2"
+  VNC_DISPLAY="$(packer_ovmf_pick_vnc_display)"
+  WINRM_PORT="$(packer_ovmf_pick_free_port)"
+
+  echo "Starting VM (Packer OVMF sysprep layout: ide.0, ${PACKER_OVMF_NET_DEV}, OVMF qcow2 pflash, no vTPM)..." >&2
+  packer_ovmf_start_qemu "$WORK_DIR" "disk.qcow2" "$VM_NAME" "$VNC_DISPLAY" "$WINRM_PORT"
+
+  running=0
+  for _ in $(seq 1 30); do
+    if packer_ovmf_qemu_running "$WORK_DIR"; then
+      running=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$running" != 1 ]]; then
+    echo "FAIL: QEMU exited immediately (see $WORK_DIR/qemu.log)" >&2
+    tail -20 "$WORK_DIR/qemu.log" 2>/dev/null || true
+    exit 1
+  fi
+
+  echo "VM is running (qemu pid $(packer_ovmf_qemu_pid "$WORK_DIR"))." >&2
+  if [[ "$GRAPHICS" == vnc ]]; then
+    echo "VNC: vncviewer 127.0.0.1:$((5900 + VNC_DISPLAY))  (display :${VNC_DISPLAY})" >&2
+    if [[ "$SHOW_CONSOLE" == 1 ]] && command -v vncviewer >/dev/null; then
+      vncviewer "127.0.0.1:$((5900 + VNC_DISPLAY))" >/dev/null 2>&1 &
+    fi
+  fi
+  echo "WinRM forward: localhost:${WINRM_PORT} -> guest :5985" >&2
+
+  echo "Waiting ${WAIT}s to confirm the guest stays up..." >&2
+  sleep "$WAIT"
+
+  if ! packer_ovmf_qemu_running "$WORK_DIR"; then
+    echo "FAIL: QEMU is not running after ${WAIT}s" >&2
+    tail -20 "$WORK_DIR/qemu.log" 2>/dev/null || true
+    exit 1
+  fi
+
+  guest_ok=0
+  if [[ "$CHECK_GUEST" == 1 ]]; then
+    echo "Waiting up to ${GUEST_WAIT}s for WinRM on localhost:${WINRM_PORT}..." >&2
+    if packer_ovmf_wait_winrm "$WINRM_PORT" "$GUEST_WAIT"; then
+      guest_ok=1
+      echo "WinRM port is accepting connections." >&2
+    else
+      echo "FAIL: WinRM not reachable within ${GUEST_WAIT}s (QEMU still running: $(packer_ovmf_qemu_running "$WORK_DIR" && echo yes || echo no))" >&2
+      echo "Hint: prep disks should expose WinRM; sysprepped goldens may need BOOT_TEST_CHECK_GUEST=0 during OOBE." >&2
+      exit 1
+    fi
+  else
+    guest_ok=1
+  fi
+
+  NEW_SIZE="$(stat -c%s "$IMAGE")"
+  NEW_MTIME="$(stat -c%Y "$IMAGE")"
+  if [[ "$NEW_SIZE" != "$ORIG_SIZE" || "$NEW_MTIME" != "$ORIG_MTIME" ]]; then
+    echo "FAIL: golden image file changed on disk (size or mtime)" >&2
+    exit 1
+  fi
+
+  echo "PASS: boot test succeeded for $IMAGE"
+  echo "  QEMU stayed running for ${WAIT}s (Packer OVMF sysprep layout)"
+  if [[ "$CHECK_GUEST" == 1 ]]; then
+    echo "  WinRM reachable on localhost:${WINRM_PORT}"
+  fi
+  echo "  Golden image file unchanged (overlay writes did not touch the backing file)"
+  exit 0
+fi
+
 require_cmd virsh virt-install qemu-img stat
 
 if ! virsh --connect "$CONNECT" uri &>/dev/null; then
@@ -275,22 +411,9 @@ if [[ "$CONNECT" == qemu:///system ]] && ! virsh --connect "$CONNECT" net-info d
   exit 1
 fi
 
-ORIG_SIZE="$(stat -c%s "$IMAGE")"
-ORIG_MTIME="$(stat -c%Y "$IMAGE")"
-
-mkdir -p "$WORK_BASE"
-WORK_DIR="$(mktemp -d "$WORK_BASE/boot-test.XXXXXX")"
-TEST_DISK="$WORK_DIR/disk.qcow2"
-
-echo "Golden image (read-only backing): $IMAGE"
-echo "Test overlay:                  $TEST_DISK"
-echo "libvirt:                       $CONNECT"
-echo "Domain:                        $VM_NAME"
-echo "Firmware:                      $FIRMWARE  |  disk/net: virtio"
-
 if [[ "$DRY_RUN" == 1 ]]; then
   echo "[dry-run] qemu-img create -f qcow2 -F qcow2 -b \"$IMAGE\" \"$TEST_DISK\""
-  echo "[dry-run] virt-install --import ... (virtio disk, virtio net, $FIRMWARE)"
+  echo "[dry-run] virt-install --import ... ($DISK_BUS disk, $FIRMWARE)"
   exit 0
 fi
 

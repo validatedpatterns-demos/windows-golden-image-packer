@@ -1,6 +1,10 @@
 # Boot-testing golden images
 
-Boot tests validate that a built **qcow2** starts under libvirt with **VirtIO** disk and network — similar to a typical OpenShift Virtualization VM — without modifying the golden file you upload or publish.
+Boot tests validate that a built **qcow2** starts without modifying the golden file you upload or publish.
+
+**UEFI images (default):** `boot-test-image.sh` uses the **same QEMU layout as the OVMF sysprep Packer pass** — q35, ich9-ahci (SATA), e1000 user networking, fresh OVMF vars, **no vTPM** (`provision_sysprep_vtpm=false`). Guest readiness is checked via forwarded **WinRM** (port 5985), matching Packer.
+
+**SeaBIOS images:** libvirt `virt-install` with virtio disk/NIC (`BOOT_TEST_METHOD=libvirt`).
 
 Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\Windows\Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
 
@@ -30,24 +34,22 @@ If you still see the **language / region** OOBE screen on **first boot of the go
 
 | Symptom | What to try |
 |--------|-------------|
-| OVMF **no bootable device** | `BOOT_TEST_DISK_BUS=sata` (default for UEFI). Do not use `virtio` unless you know OVMF boots virtio-blk on your host. |
+| OVMF **no bootable device** / **100% CPU** loop | Matches Packer sysprep pass: **ich9-ahci**, no vTPM. Run `make boot-test-image IMAGE=...` (default **packer** method). |
 | VM stops during first boot | Sysprep OOBE can reboot; use `BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900`. |
+| WinRM check fails on sysprepped golden | OOBE may delay WinRM; use `BOOT_TEST_CHECK_GUEST=0` or wait longer. Prep disks should pass with default guest check. |
 | **winload.efi** / blue screen after locale changes | Rebuild with current split sysprep answer files. Run `make clean && make build-…`. |
 | SeaBIOS image in UEFI VM | Rebuild with `efi_boot=true` or `BOOT_TEST_FIRMWARE=bios`. |
+| Compare with legacy libvirt path | `BOOT_TEST_METHOD=libvirt make boot-test-image IMAGE=...` |
 
 ## How it works
 
-1. **`qemu-img create -b`** builds a copy-on-write overlay on top of the golden qcow2 under `~/VirtualMachines/boot-test.*` by default (overlays can be large — not `/tmp`). All writes go to the overlay; the backing image stays read-only.
-2. **`virt-install --import`** starts a transient libvirt domain (`boot-test-windows-server-…`) with:
-   - `bus=virtio` root disk
-   - `model=virtio` NIC on the `default` network
-   - **UEFI** (`machine q35`, explicit OVMF loader) when `efi_boot = true` (default)
-   - **TPM 2.0** (`swtpm`, `tpm-crb`) when `vtpm = true` (default with UEFI). Set `BOOT_TEST_TPM=0` to skip.
-   - Root disk **`bus=sata`** by default for UEFI (same as install; OVMF reads the ESP). Use `--disk-bus scsi` to test virtio-scsi (OpenShift runtime bus)
-3. The test checks that the VM **stays running**, optionally that the **QEMU guest agent** reports an IPv4 address, and that the **golden file size/mtime** did not change.
-4. The domain and overlay are removed on exit (unless you keep them for debugging).
+1. **`qemu-img create -b`** builds a copy-on-write overlay under `~/VirtualMachines/boot-test.*` (backing qcow2 stays read-only).
+2. **UEFI (default `BOOT_TEST_METHOD=packer`):** `qemu-system-x86_64` with the **OVMF sysprep Packer** device list (`scripts/packer-ovmf-sysprep-qemu.sh`): q35, ich9-ahci + `bootindex=1`, e1000, OVMF pflash, **no vTPM**.
+3. **SeaBIOS or `BOOT_TEST_METHOD=libvirt`:** `virt-install --import` on libvirt with virtio disk/NIC (optional TPM when `BOOT_TEST_TPM=1` and `vtpm=true` in pkrvars).
+4. The test checks that the VM **stays running**, optionally **WinRM** (packer) or **guest-agent IP** (libvirt), and that the **golden file size/mtime** did not change.
+5. The QEMU process / libvirt domain and overlay are removed on exit (unless you keep them for debugging).
 
-Requires **KVM**, **libvirt** (`qemu:///system`), **`swtpm`** (for default TPM), the **`default`** network (`virsh net-list --all`), and the **`acl`** package when overlays live under your home directory (the script grants the libvirt **qemu** user traverse/read ACLs on the overlay and golden backing file).
+**Packer method** requires **KVM**, `qemu-system-x86_64`, and `python3` (free port selection). **Libvirt method** requires libvirt, the `default` network, and optionally `swtpm` + ACLs under `$HOME`.
 
 If you prefer not to use ACLs, run with `BOOT_TEST_CONNECT=qemu:///session` so the VM runs as your user (session libvirt, not the system hypervisor).
 
@@ -81,14 +83,16 @@ Pass flags through `boot-test-golden.sh` to `boot-test-image.sh`:
 
 | Flag / variable | Default | Meaning |
 |-----------------|---------|---------|
+| `BOOT_TEST_METHOD` / `--method` | `packer` for UEFI, `libvirt` for BIOS | UEFI uses the OVMF sysprep Packer QEMU layout; libvirt is legacy/alternate |
 | `BOOT_TEST_FIRMWARE` / `--firmware` | matches `efi_boot` in `build.pkrvars.hcl` (`uefi` by default) | Must match how the qcow2 was installed (`uefi` for OpenShift images) |
-| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `sata` for UEFI | Matches install bus. Use `scsi` to test OpenShift virtio-scsi |
-| `BOOT_TEST_WAIT` / `--wait` | `120` | Seconds the VM must stay up before guest checks |
-| `BOOT_TEST_GUEST_WAIT` / `--guest-wait` | `600` | Max seconds to wait for guest-agent IP |
+| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `sata` for libvirt UEFI | libvirt method only |
+| `BOOT_TEST_WAIT` / `--wait` | `180` | Seconds the VM must stay up before guest checks |
+| `BOOT_TEST_GUEST_WAIT` / `--guest-wait` | `600` | Max seconds to wait for WinRM (packer) or guest-agent IP (libvirt) |
 | `BOOT_TEST_CHECK_GUEST` | `1` | Set `0` or `--no-guest-check` to only verify the VM process stays running |
 | `BOOT_TEST_GRAPHICS` / `--graphics` | `vnc` | `none` for headless automation |
-| `BOOT_TEST_SHOW_CONSOLE` / `--no-console` | `1` | Launch **virt-viewer** when the VM is running |
-| `BOOT_TEST_CONNECT` | `qemu:///system` | libvirt URI |
+| `BOOT_TEST_SHOW_CONSOLE` / `--no-console` | `1` | Launch **vncviewer** (packer) or **virt-viewer** (libvirt) |
+| `BOOT_TEST_CONNECT` | `qemu:///system` | libvirt URI (libvirt method only) |
+| `BOOT_TEST_TPM` | `1` | libvirt UEFI only; set `0` to skip TPM |
 | `BOOT_TEST_KEEP_VM` / `--keep-vm` | `0` | Leave the domain defined after the test |
 | `BOOT_TEST_WORK_DIR` | `~/VirtualMachines` | Parent directory for overlay qcow2 (`boot-test.*` subdirs) |
 | `BOOT_TEST_KEEP_DISK` / `--keep-disk` | `0` | Keep the overlay under `BOOT_TEST_WORK_DIR/boot-test.*` |

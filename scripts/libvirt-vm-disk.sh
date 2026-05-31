@@ -5,6 +5,12 @@
 
 # shellcheck shell=bash
 
+# libguestfs defaults to the libvirt backend; on some hosts that cannot spawn the appliance
+# (SELinux, session qemu). Direct backend avoids libvirt for read-only inspection.
+libguestfs_direct() {
+  LIBGUESTFS_BACKEND=direct "$@"
+}
+
 # Select a matching OVMF CODE+VARS pair (same generation/size). q35 needs 4M firmware on
 # current Fedora (OVMF_CODE_4M.*.qcow2); 2M OVMF_CODE.fd often fails to boot on q35.
 libvirt_ovmf_paths() {
@@ -140,28 +146,34 @@ golden_image_has_efi_partition() {
   fi
 
   # Linux images expose ESP mount points; Windows ESP is usually not mounted in the guest view.
-  if virt-filesystems -a "$image" --all 2>/dev/null | grep -qE '/boot/efi|/efi'; then
+  if libguestfs_direct virt-filesystems -a "$image" --all 2>/dev/null | grep -qE '/boot/efi|/efi'; then
     return 0
   fi
 
   # Windows post-mbr2gpt: inspect GPT partition types for the EFI system partition GUID.
-  if command -v guestfish >/dev/null 2>&1; then
-    local -a parts=()
-    local part disk num type upper
-    local esp_guid='C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
-    mapfile -t parts < <(guestfish --ro -a "$image" run : list-partitions 2>/dev/null || true)
-    for part in "${parts[@]}"; do
-      [[ -z "$part" ]] && continue
-      num="${part##*[!0-9]}"
-      disk="${part%"$num"}"
-      [[ -z "$num" || -z "$disk" ]] && continue
-      type="$(guestfish --ro -a "$image" run : part-get-gpt-type "$disk" "$num" 2>/dev/null || true)"
-      upper="$(echo "$type" | tr '[:lower:]' '[:upper:]')"
-      if [[ "$upper" == "$esp_guid" ]]; then
-        return 0
-      fi
-    done
+  if ! command -v guestfish >/dev/null 2>&1; then
+    return 2
   fi
+
+  local -a parts=()
+  local part disk num type upper gf_out gf_rc=0
+  local esp_guid='C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
+  gf_out="$(libguestfs_direct guestfish --ro -a "$image" run : list-partitions 2>&1)" || gf_rc=$?
+  if [[ "$gf_rc" -ne 0 ]] || [[ "$gf_out" == *libguestfs:*error* ]]; then
+    return 2
+  fi
+  mapfile -t parts <<< "$gf_out"
+  for part in "${parts[@]}"; do
+    [[ -z "$part" ]] && continue
+    num="${part##*[!0-9]}"
+    disk="${part%"$num"}"
+    [[ -z "$num" || -z "$disk" ]] && continue
+    type="$(libguestfs_direct guestfish --ro -a "$image" run : part-get-gpt-type "$disk" "$num" 2>/dev/null || true)"
+    upper="$(echo "$type" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$upper" == "$esp_guid" ]]; then
+      return 0
+    fi
+  done
 
   return 1
 }

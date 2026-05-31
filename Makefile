@@ -48,7 +48,7 @@ help:
 	@echo "  push-quay       Push all golden qcow2 images found to Quay (quay.env)"
 	@echo "  optimize-image  Re-encode golden qcow2(s) for smaller file size (IMAGE_OPTIMIZE=0 skips auto step in build)"
 	@echo "  image-size      Report virtual size (DataVolume min) and file size for golden qcow2(s)"
-	@echo "  boot-test       Boot-test newest golden image (virtio disk, copy-on-write overlay)"
+	@echo "  boot-test       Boot-test newest golden image (UEFI: Packer OVMF layout; BIOS: libvirt)"
 	@echo "  boot-test-all   Boot-test every golden qcow2 under output/"
 	@echo "  boot-test-2022  boot-test-2025   version-specific boot tests"
 	@echo "  boot-test-image IMAGE=path/to.qcow2   test one file"

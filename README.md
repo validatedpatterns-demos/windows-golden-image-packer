@@ -217,7 +217,7 @@ example.pkrvars.hcl
 
 - **OVMF `Boot002` / `Boot0003`**: firmware is active — remove `ovmf_*` from your var file or set `efi_boot = true` intentionally and use the virt-install UEFI script instead of Packer.
 
-- **No bootable device**: do not pass `qemuargs` with `-drive` — it replaces Packer's disk and Windows ISO drives.
+- **No bootable device**: do not pass `qemuargs` with `-drive` — it replaces Packer's disk and Windows ISO drives. Likewise, **`qemuargs` with `-device`** overrides Packer's NIC and **virtio-scsi** devices; use **`--device`** to append (see MBR source) or omit on OVMF passes.
 
 - **Stuck on "Booting from Floppy"** or **Press any key**: `boot_command` sends Space/Enter; set `headless = false` and watch the VNC URL Packer prints.
 - **Two VMs at once** (`packer-win2022-standard` and `packer-win2022-standard-install`): `packer build .` without `-only` runs every build in `packer/`. Use `make build` or `packer build -only=windows-golden-image .`. Do not use `packer build build.pkr.hcl` alone (that skips `variables.pkr.hcl`).

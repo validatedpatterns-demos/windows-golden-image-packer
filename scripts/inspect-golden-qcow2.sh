@@ -26,12 +26,17 @@ echo ""
 
 if command -v virt-filesystems >/dev/null 2>&1; then
   echo "Partitions:"
-  virt-filesystems -a "$IMAGE" --all || true
+  libguestfs_direct virt-filesystems -a "$IMAGE" --all || true
   echo ""
-  if golden_image_has_efi_partition "$IMAGE"; then
+  efi_rc=0
+  golden_image_has_efi_partition "$IMAGE" || efi_rc=$?
+  if [[ "$efi_rc" -eq 0 ]]; then
     echo "Firmware hint: UEFI (EFI system partition present)"
-    echo "Recommended boot-test: make boot-test (UEFI + sata by default)"
-    echo "OpenShift runtime: disk.bus scsi (virtio-scsi); use --disk-bus scsi to test"
+    echo "Recommended boot-test: make boot-test (UEFI uses Packer OVMF sysprep QEMU layout by default)"
+    echo "Legacy libvirt test: BOOT_TEST_METHOD=libvirt make boot-test-image IMAGE=..."
+  elif [[ "$efi_rc" -eq 2 ]]; then
+    echo "Firmware hint: unknown (could not inspect partitions with libguestfs)"
+    echo "Recommended boot-test: try UEFI + sata; install libguestfs-tools if missing"
   else
     echo "Firmware hint: SeaBIOS/MBR (no ESP listed)"
     echo "Recommended boot-test: BOOT_TEST_FIRMWARE=bios"

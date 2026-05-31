@@ -51,6 +51,8 @@ BUILD_SCHEDULE_LOG="$BUILD_SCHEDULE_LOG" "$ROOT/scripts/print-build-schedule.sh"
 echo ""
 echo "=== OVMF sysprep (GPT disk, BCD generalize requires UEFI firmware) ==="
 echo "  Prep disk: $BASE_IMAGE"
+echo "  Packer work directory: $WORK_DIR"
+echo "  While the VM runs: ./scripts/show-packer-console.sh  (VNC port + work path)"
 echo ""
 
 cd "$PACKER_DIR"

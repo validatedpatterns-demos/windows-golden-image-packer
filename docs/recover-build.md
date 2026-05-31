@@ -88,7 +88,9 @@ Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-insta
 
 | `Timeout while waiting for machine to shut down` after sysprep on MBR pass | Sysprep failed on SeaBIOS (BCD generalize needs UEFI). Update templates and retry: `EXECUTE=1 make recover-provision VERSION=2022` (GPT work disk → sysprep-only), or copy work disk to `recovery/` and `make build-provision-sysprep-only BASE_IMAGE=...`. |
 
-| `unsupported bus type 'sata'` on provision | Packer QEMU uses `-drive if=sata`, which q35 rejects. Fixed: provision pass uses `provision_disk_interface=ide` (default). Update and retry. |
+| `Guest has not initialized the display` / blank VNC, **100% CPU** | **OVMF pflash opened as `format=raw`** on qcow2 firmware files loops; templates now use **`format=qcow2`** and **`ide-hd` on `ide.0`**. Confirm cmdline has **`format=qcow2`** on both pflash drives and **no `tpm-tis`**. Kill VM and retry. |
+
+| `unsupported bus type 'sata'` on provision | Packer QEMU uses `-drive if=sata`, which q35 rejects. SeaBIOS prep uses **`provision_disk_interface=ide`**; OVMF passes use **`provision_ovmf_disk_interface=virtio-scsi`**. |
 
 | `Disk ... is already in use by other guests ['win-uefi-install-2022']` | Stale **virt-install** domain still references the install qcow2 (common after Ctrl+C). Run **`make clean`** (uses `virsh undefine --nvram` for OVMF domains). Manual: `virsh --connect qemu:///session destroy win-uefi-install-2022; virsh --connect qemu:///session undefine win-uefi-install-2022 --nvram` |
 | `permission denied` opening `packer-win*-install.qcow2` on provision | Usually an **old** install disk left as `nobody:nobody` mode `0600` from `qemu:///system` before ACL/session defaults. **New builds** default to `qemu:///session` (disk stays yours) or set POSIX ACLs before system virt-install. One-time fix: `chown $USER:$USER output/.packer-2022/packer-win2022-standard-install.qcow2 && chmod u+rw ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. Ensure `kvm` group membership (`groups`) and `dnf install acl` if you force `LIBVIRT_CONNECT=qemu:///system`. |

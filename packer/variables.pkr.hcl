@@ -52,6 +52,12 @@ variable "vtpm" {
   default     = true
 }
 
+variable "provision_sysprep_vtpm" {
+  type        = bool
+  description = "Emulated TPM on the OVMF sysprep pass (from_install_gpt). Default false: vTPM can prevent a clean first OVMF boot after mbr2gpt; OpenShift adds vTPM at deploy."
+  default     = false
+}
+
 variable "windows_iso_path_2022" {
   type        = string
   description = "Path to the Windows Server 2022 installation ISO (used when windows_version = 2022)."
@@ -139,12 +145,23 @@ variable "install_disk_interface" {
 
 variable "provision_disk_interface" {
   type        = string
-  description = "Disk bus for the Packer QEMU provision pass (build-provision-only). Must be ide: the Packer QEMU plugin uses -drive if=sata which QEMU q35 rejects. virtio-scsi is installed during provision for OpenShift runtime."
+  description = "Disk bus for the SeaBIOS MBR Packer prep pass (from_install_mbr). Use ide on pc/SeaBIOS."
   default     = "ide"
 
   validation {
     condition     = contains(["ide", "virtio-scsi"], var.provision_disk_interface)
     error_message = "The provision_disk_interface variable must be ide or virtio-scsi."
+  }
+}
+
+variable "provision_ovmf_disk_interface" {
+  type        = string
+  description = "Deprecated: OVMF disk bus is fixed to SATA (ich9-ahci) via gpt_ovmf_qemuargs in locals.pkr.hcl. Kept for compatibility."
+  default     = "sata"
+
+  validation {
+    condition     = contains(["sata", "virtio-scsi"], var.provision_ovmf_disk_interface)
+    error_message = "The provision_ovmf_disk_interface variable must be sata or virtio-scsi."
   }
 }
 

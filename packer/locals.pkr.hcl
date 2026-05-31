@@ -128,10 +128,35 @@ locals {
 
   autounattend_cd = var.efi_boot ? local.winrm_floppy_files : {}
 
+  # PROVISION CD (pass 2+): WinRM locators for OVMF first boot + VirtIO driver tree at CD root.
+  provision_winrm_cd_content = {
+    "enable-winrm.ps1"         = local.enable_winrm_ps1
+    "enable-winrm.cmd"         = local.enable_winrm_cmd
+    "enable-winrm-locator.cmd" = local.enable_winrm_locator
+  }
+
   # PROVISION CD: driver *contents* at CD root (viostor\2k22\amd64). WinRM also uploads drivers/ (~27MB).
   provision_cd_files = [
     "${path.root}/../drivers/*",
   ]
+
+  # OVMF/q35: match libvirt import layout (ide-hd on ide.0, OVMF pflash as qcow2 — not raw).
+  # Opening OVMF_CODE_4M.qcow2 / efivars with format=raw causes a UEFI boot loop (~100% CPU).
+  gpt_ovmf_machine = "type=q35,accel=${var.qemu_accelerator},smm=on"
+
+  gpt_ovmf_qemuargs = concat(
+    [
+      ["-machine", local.gpt_ovmf_machine],
+      ["-boot", "menu=on,strict=on"],
+      ["-display", "none"],
+      ["-drive", "if=none,file={{ .OutputDir }}/{{ .Name }},id=disk0,cache=writeback,discard=ignore,format=qcow2"],
+      ["-drive", "file=${var.ovmf_code_path},if=pflash,unit=0,format=qcow2,readonly=on"],
+      ["-drive", "file={{ .OutputDir }}/efivars.fd,if=pflash,unit=1,format=qcow2"],
+      ["-device", "ide-hd,drive=disk0,bus=ide.0,bootindex=1,write-cache=on"],
+      ["-device", "${var.install_net_device},netdev=user.0,bootindex=5"],
+    ],
+    var.provision_sysprep_vtpm ? [["-device", "tpm-tis,tpmdev=tpm0"]] : []
+  )
 
   provision_env_vars = [
     "WINRM_PASSWORD=${var.admin_password}",

@@ -8,6 +8,8 @@
 #   windows-golden-provision-gpt-sysprep — OVMF/q35: sysprep after MBR prep (required for BCD)
 #   windows-golden-provision-gpt         — OVMF/q35: full provision + sysprep on GPT salvage
 #
+# OVMF sources omit the PROVISION CD at boot (see from_install_gpt); a data CD causes OVMF
+# to hang on a blank screen. Drivers/scripts upload over WinRM after connect.
 # Usage:
 #   make build-provision-only VERSION=2022 BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2
 #   EXECUTE=1 make recover-provision VERSION=2022
@@ -30,11 +32,15 @@ source "qemu" "from_install_mbr" {
 
   efi_boot = false
 
-  cd_label = "PROVISION"
-  cd_files = local.provision_cd_files
+  cd_label   = "PROVISION"
+  cd_content = local.provision_winrm_cd_content
+  cd_files   = local.provision_cd_files
+
+  boot_wait = "30s"
 
   qemuargs = [
-    ["-device", "qemu-xhci"],
+    # Append only (--device). A single -device entry overrides Packer's NIC/disk devices.
+    ["--device", "qemu-xhci"],
   ]
 
   communicator   = "winrm"
@@ -54,28 +60,34 @@ source "qemu" "from_install_gpt" {
   accelerator      = var.qemu_accelerator
   cpus             = var.vm_cpus
   memory           = var.vm_memory
-  headless         = var.headless
   disk_image       = true
   iso_url          = var.base_image_path
   iso_checksum     = "none"
   skip_resize_disk = true
-  disk_interface   = var.provision_disk_interface
+  # Placeholder; gpt_ovmf_qemuargs attaches the disk via ich9-ahci (SATA).
+  disk_interface   = "ide"
   net_device       = var.install_net_device
   machine_type     = "q35"
   cpu_model        = "host"
+  vga              = "std"
 
   efi_boot          = true
   efi_firmware_code = var.ovmf_code_path
   efi_firmware_vars = var.ovmf_vars_path
-  vtpm              = var.vtpm
+  # Sysprep pass: no vTPM (OpenShift adds it at deploy). See provision_sysprep_vtpm.
+  vtpm              = var.provision_sysprep_vtpm
 
-  cd_label = "PROVISION"
-  cd_files = local.provision_cd_files
+  # Do not attach a PROVISION CD on OVMF boot: fresh OVMF NVRAM boots CD-ROM before the
+  # disk (Packer's -boot order= is BIOS-only). A non-bootable drivers ISO then hangs
+  # with a blank VNC screen until WinRM times out. Scripts/drivers are uploaded via
+  # file provisioners after WinRM connects; WinRM itself persists on the prep disk.
+  boot_wait    = "45s"
+  boot_command = []
+  # Headless prints a vnc:// URL in the log; headless=false adds GTK and often leaves VNC black.
+  headless  = true
+  display   = "none"
 
-  qemuargs = [
-    ["-boot", "order=c"],
-    ["-device", "qemu-xhci"],
-  ]
+  qemuargs = local.gpt_ovmf_qemuargs
 
   communicator   = "winrm"
   winrm_username = var.winrm_username
@@ -147,6 +159,7 @@ build {
       "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
+      "${path.root}/../scripts/schedule-winrm-at-boot.ps1",
     ]
   }
 }
