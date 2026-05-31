@@ -94,7 +94,8 @@ locals {
   # Split sysprep answer files: generalize-only for sysprep.exe, oobe-only for Panther on first deploy boot.
   sysprep_generalize_unattend = templatefile("${path.root}/../http/sysprep-generalize.xml.tpl", {})
   sysprep_oobe_unattend = templatefile("${path.root}/../http/sysprep-oobe.xml.tpl", {
-    admin_password = local.admin_password_xml
+    admin_password  = local.admin_password_xml
+    product_key_xml = local.product_key_xml
   })
 
   autounattend_template_vars = {

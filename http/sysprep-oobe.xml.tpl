@@ -30,6 +30,7 @@
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+${product_key_xml}
       <AutoLogon>
         <Enabled>false</Enabled>
       </AutoLogon>
