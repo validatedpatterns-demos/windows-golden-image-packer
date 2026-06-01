@@ -53,6 +53,8 @@ echo "=== OVMF sysprep (GPT disk, BCD generalize requires UEFI firmware) ==="
 echo "  Prep disk: $BASE_IMAGE"
 echo "  Packer work directory: $WORK_DIR"
 echo "  While the VM runs: ./scripts/show-packer-console.sh  (VNC port + work path)"
+echo "  Sysprep normally finishes in 10-25 minutes; setupact.log tails every 60s after 'Running sysprep'."
+echo "  If sysprep exceeds 45 minutes it fails with diagnostics (SYSPREP_TIMEOUT_MINUTES to override)."
 echo ""
 
 cd "$PACKER_DIR"

@@ -111,6 +111,46 @@ function Repair-UefiBootIfNeeded {
     }
 }
 
+function Wait-SysprepWithProgress {
+    param(
+        [string]$SysprepPath,
+        [string[]]$SysprepArgs,
+        [int]$TimeoutMinutes = 45
+    )
+
+    Remove-Item -Path $sysprepStdout, $sysprepStderr -Force -ErrorAction SilentlyContinue
+
+    $proc = Start-Process -FilePath $SysprepPath -ArgumentList $SysprepArgs -PassThru -NoNewWindow `
+        -RedirectStandardOutput $sysprepStdout -RedirectStandardError $sysprepStderr
+
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $lastSetupActSize = 0L
+
+    while (-not $proc.HasExited) {
+        if ((Get-Date) -gt $deadline) {
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+            Save-SysprepDiagnostics "sysprep timeout after ${TimeoutMinutes}m"
+            Write-SysprepDiagnosticLogs
+            throw "sysprep.exe did not finish within ${TimeoutMinutes} minutes. Check VNC (./scripts/show-packer-console.sh) and $diagLog"
+        }
+
+        foreach ($dir in @($sysprepPanther, $panther)) {
+            $setupAct = Join-Path $dir 'setupact.log'
+            if (-not (Test-Path $setupAct)) { continue }
+            $size = (Get-Item -LiteralPath $setupAct).Length
+            if ($size -gt $lastSetupActSize) {
+                $lastSetupActSize = $size
+                Write-Host "=== tail $setupAct ==="
+                Get-LogTail -Path $setupAct -Lines 8 | ForEach-Object { Write-Host $_ }
+            }
+        }
+
+        Start-Sleep -Seconds 60
+    }
+
+    return $proc.ExitCode
+}
+
 function Invoke-GuestShutdown {
     Write-Host 'Forcing guest shutdown for Packer (sysprep runs without /shutdown so OOBE unattend can be restored first).'
     & "$env:SystemRoot\System32\shutdown.exe" /s /t 0 /f
@@ -190,19 +230,34 @@ try {
     Repair-UefiBootIfNeeded
 
     . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
-    Write-Host 'Ensuring Edge is provisioned for all users and stopping browser processes...'
-    Remove-SysprepBlockingAppx
+    if (Get-Command Test-EdgeSysprepReady -ErrorAction SilentlyContinue) {
+        $ready, $readyMsg = Test-EdgeSysprepReady
+        if ($ready) {
+            Write-Host "Edge sysprep-ready: $readyMsg (skipping full Edge reprovision)"
+            Stop-EdgeForSysprep
+        }
+        else {
+            Write-Host "Edge not sysprep-ready ($readyMsg); running full Edge prep..."
+            Remove-SysprepBlockingAppx
+        }
+    }
+    else {
+        Write-Host 'Ensuring Edge is provisioned for all users and stopping browser processes...'
+        Remove-SysprepBlockingAppx
+    }
 
     $unattend = $generalizeUnattend
     # Do not pass /shutdown: sysprep may power off before this script restores sysprep-oobe.xml,
     # and QEMU often ignores sysprep /shutdown anyway (Packer then times out waiting for power-off).
-    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', "/unattend:$unattend")
-    Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
+    $timeoutMin = 45
+    if ($env:SYSPREP_TIMEOUT_MINUTES -match '^\d+$') {
+        $timeoutMin = [int]$env:SYSPREP_TIMEOUT_MINUTES
+    }
+    # /quiet suppresses confirmation dialogs that can block sysprep headless under QEMU.
+    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', "/unattend:$unattend")
+    Write-Host ('Running sysprep ' + ($sysprepArgs -join ' ') + " (timeout ${timeoutMin}m, setupact.log tailed every 60s)")
 
-    Remove-Item -Path $sysprepStdout, $sysprepStderr -Force -ErrorAction SilentlyContinue
-    $proc = Start-Process -FilePath $sysprep -ArgumentList $sysprepArgs -Wait -PassThru -NoNewWindow `
-        -RedirectStandardOutput $sysprepStdout -RedirectStandardError $sysprepStderr
-    $sysprepExit = $proc.ExitCode
+    $sysprepExit = Wait-SysprepWithProgress -SysprepPath $sysprep -SysprepArgs $sysprepArgs -TimeoutMinutes $timeoutMin
     $codeLabel = if ($null -eq $sysprepExit) { 'unknown' } else { "$sysprepExit" }
 
     if ($null -eq $sysprepExit -or $sysprepExit -ne 0) {

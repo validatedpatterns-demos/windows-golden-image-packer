@@ -97,7 +97,7 @@ source "qemu" "from_install_gpt" {
   winrm_port     = 5985
 
   shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
-  shutdown_timeout = "90m"
+  shutdown_timeout = "120m"
 }
 
 build {
@@ -197,12 +197,17 @@ build {
   provisioner "powershell" {
     environment_vars = local.provision_env_vars
     scripts          = [
-      "${path.root}/../scripts/01-install-virtio-drivers.ps1",
+      "${path.root}/../scripts/verify-virtio-boot-drivers.ps1",
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
     ]
+  }
+
+  # Clear pending reboot from locale/DISM before sysprep (01-install-virtio is not re-run here).
+  provisioner "windows-restart" {
+    restart_timeout = "30m"
   }
 
   post-processor "shell-local" {
