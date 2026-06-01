@@ -25,6 +25,8 @@ On a Linux build host with KVM:
 - Windows Server **installation ISOs** (2022 and/or 2025) — licensed media from Microsoft
 - [virtio-win](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/) ISO
 
+**Note:** This was tested with packer installed via homebrew on Fedora 44 (specifically a Red Hat CSB).
+
 ```bash
 # Fedora/RHEL example
 sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm acl
