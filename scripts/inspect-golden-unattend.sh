@@ -5,6 +5,10 @@
 # Read C:\Windows\Panther\unattend.xml from a golden qcow2 (offline) to confirm sysprep OOBE locale settings.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/libvirt-vm-disk.sh
+source "$ROOT/scripts/libvirt-vm-disk.sh"
+
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" || ! -f "$IMAGE" ]]; then
   echo "Usage: $0 /path/to/windows-server-*.qcow2" >&2
@@ -19,7 +23,7 @@ fi
 IMAGE="$(readlink -f "$IMAGE")"
 echo "Inspecting $IMAGE" >&2
 
-unattend="$(guestfish -a "$IMAGE" -i <<'EOF'
+unattend="$(libguestfs_direct guestfish --ro -a "$IMAGE" -i <<'EOF'
 cat /Windows/Panther/unattend.xml
 EOF
 )" || {
@@ -30,6 +34,12 @@ EOF
 if printf '%s\n' "$unattend" | grep -q 'pass="windowsPE"'; then
   echo "FAIL: Panther unattend is the install answer file (contains windowsPE pass)." >&2
   echo "      Provision/sysprep did not replace it with sysprep-oobe.xml." >&2
+  exit 1
+fi
+
+if printf '%s\n' "$unattend" | grep -q 'pass="generalize"'; then
+  echo "FAIL: Panther unattend is sysprep-generalize.xml (missing oobeSystem for first deploy boot)." >&2
+  echo "      Rebuild with current sysprep.ps1 (restores sysprep-oobe.xml after sysprep.exe)." >&2
   exit 1
 fi
 

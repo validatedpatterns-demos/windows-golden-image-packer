@@ -199,6 +199,19 @@ try {
         throw "sysprep.exe failed (exit $codeLabel). Diagnostics saved to $diagLog; extract with: make extract-sysprep-log IMAGE=<qcow2>"
     }
 
+    # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
+    $oobeSource = Resolve-OobeUnattendPath
+    Copy-Item -Path $oobeSource -Destination (Join-Path $panther 'unattend.xml') -Force
+    Copy-Item -Path $oobeSource -Destination 'C:\unattend.xml' -Force
+    $oobeXml = Get-Content -Path (Join-Path $panther 'unattend.xml') -Raw
+    if ($oobeXml -notmatch 'Microsoft-Windows-International-Core') {
+        throw 'Panther unattend after sysprep is missing Microsoft-Windows-International-Core'
+    }
+    if ($oobeXml -match 'pass="generalize"') {
+        throw 'Panther unattend after sysprep is still sysprep-generalize.xml'
+    }
+    Write-Host 'Restored OOBE-only unattend in Panther after sysprep generalize'
+
     Write-Host 'sysprep.exe completed successfully; forcing guest shutdown (sysprep /shutdown can leave the VM running under QEMU).'
     Start-Process -FilePath "$env:SystemRoot\System32\shutdown.exe" -ArgumentList @('/s', '/t', '0', '/f') -NoNewWindow
     Write-Host 'shutdown /s /t 0 /f issued; Packer will wait for power-off.'

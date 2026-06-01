@@ -194,6 +194,8 @@ build {
     scripts          = [
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
+      "${path.root}/../scripts/configure-oobe-locale.ps1",
+      "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
     ]
   }
 
