@@ -223,6 +223,72 @@ function Test-SysprepNotAlreadyGeneralized {
     }
 }
 
+function Test-SysprepGeneralizeSucceeded {
+    return Test-Path -LiteralPath 'C:\Windows\System32\Sysprep\Sysprep_succeeded.tag'
+}
+
+function Test-SysprepOvmfBcdEfiExportExit {
+    param([object]$ExitCode)
+
+    if ($null -eq $ExitCode -or [int]$ExitCode -ne 16001) {
+        return $false
+    }
+    if (-not (Test-SysprepGeneralizeSucceeded)) {
+        return $false
+    }
+
+    $needles = @(
+        'BiUpdateEfiEntry failed c000000d',
+        'BiExportStoreAlterationsToEfi failed c000000d',
+        'Failed to export alterations to firmware'
+    )
+    $haystack = @()
+    foreach ($dir in @($sysprepPanther, $panther)) {
+        $path = Join-Path $dir 'setuperr.log'
+        if (Test-Path -LiteralPath $path) {
+            $haystack += Get-Content -Path $path -ErrorAction SilentlyContinue
+        }
+        $setupAct = Join-Path $dir 'setupact.log'
+        if (Test-Path -LiteralPath $setupAct) {
+            $haystack += Get-Content -Path $setupAct -Tail 40 -ErrorAction SilentlyContinue
+        }
+    }
+    $text = ($haystack -join "`n")
+    foreach ($needle in $needles) {
+        if ($text -notmatch [regex]::Escape($needle)) {
+            return $false
+        }
+    }
+    if ($text -notmatch 'Successfully generalized the bcd store') {
+        return $false
+    }
+    return $true
+}
+
+function Get-WindowsBootPartitionSpec {
+    if (Test-Path 'C:\Windows') {
+        return 'C:'
+    }
+    $vol = Get-Partition -ErrorAction SilentlyContinue |
+        Get-Volume -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriveLetter -and (Test-Path "$($_.DriveLetter):\Windows") } |
+        Select-Object -First 1
+    if ($vol -and $vol.DriveLetter) {
+        return "$($vol.DriveLetter):"
+    }
+    throw 'Could not determine Windows boot partition letter for post-sysprep BCD repair'
+}
+
+function Repair-GeneralizedBcdStore {
+    $part = Get-WindowsBootPartitionSpec
+    Write-Host "Repairing generalized BCD store for first deploy boot (partition=$part)"
+    foreach ($id in @('{default}', '{current}')) {
+        & bcdedit.exe /set $id device "partition=$part" 2>&1 | Out-Host
+        & bcdedit.exe /set $id osdevice "partition=$part" 2>&1 | Out-Host
+    }
+    & bcdedit.exe /set '{bootmgr}' device "partition=$part" 2>&1 | Out-Host
+}
+
 try {
     $clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
     if (Test-Path $clearScript) {
@@ -280,8 +346,6 @@ try {
         }
     }
 
-    Repair-UefiBootIfNeeded
-
     Remove-PhantomVirtioBootDevices
 
     . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
@@ -316,13 +380,20 @@ try {
     $codeLabel = if ($null -eq $sysprepExit) { 'unknown' } else { "$sysprepExit" }
 
     if ($null -eq $sysprepExit -or $sysprepExit -ne 0) {
-        Write-Host "sysprep.exe exited with code $codeLabel"
-        Save-SysprepDiagnostics "sysprep exit $codeLabel"
-        Write-SysprepDiagnosticLogs
-        Write-Host "Common causes of exit ${codeLabel}: Appx/Edge (see setuperr.log), sysprep already run on this disk, or invalid generalize unattend."
-        Write-Host "Extract logs: make extract-sysprep-log IMAGE=<qcow2 from work/>"
-        exit 1
+        if (Test-SysprepOvmfBcdEfiExportExit -ExitCode $sysprepExit) {
+            Write-Warning "sysprep.exe exit ${codeLabel} with Sysprep_succeeded.tag (OVMF cannot export BCD to EFI NVRAM; BCD store generalize succeeded). Continuing post-sysprep steps."
+        }
+        else {
+            Write-Host "sysprep.exe exited with code $codeLabel"
+            Save-SysprepDiagnostics "sysprep exit $codeLabel"
+            Write-SysprepDiagnosticLogs
+            Write-Host "Common causes of exit ${codeLabel}: Appx/Edge (see setuperr.log), sysprep already run on this disk, or invalid generalize unattend."
+            Write-Host "Extract logs: make extract-sysprep-log IMAGE=<qcow2 from work/>"
+            exit 1
+        }
     }
+
+    Repair-GeneralizedBcdStore
 
     # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
     Restore-OobeUnattend -Reason 'after sysprep generalize'
