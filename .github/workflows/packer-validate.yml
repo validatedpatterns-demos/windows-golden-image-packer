@@ -26,5 +26,10 @@ jobs:
       - name: Packer init
         run: packer init .
 
+      - name: Validate unattend answer files
+        run: bash ../scripts/validate-unattend.sh
+        env:
+          VAR_FILE: ci.pkrvars.hcl
+
       - name: Packer validate
         run: packer validate -var-file=ci.pkrvars.hcl .

@@ -1,4 +1,7 @@
 PACKER_DIR        := packer
+# Override: PACKER=/path/to/packer make validate
+PACKER            ?= $(shell bash scripts/resolve-packer.sh 2>/dev/null || echo packer)
+export PATH       := $(HOME)/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/bin:$(PATH)
 VAR_FILE          ?= build.pkrvars.hcl
 VALIDATE_VAR_FILE ?= ci.pkrvars.hcl
 # Var files in repo root; Packer runs from packer/ (flags must follow the subcommand).
@@ -29,12 +32,12 @@ PACKER_WORK_SUBDIR     = work
 # abort: keep VM/qcow2 on Ctrl+C or provision failure (retry with build-provision-only). cleanup: Packer default.
 PACKER_ON_ERROR       ?= abort
 
-.PHONY: help init validate build build-versions build-version build-install build-provision-only build-provision-sysprep-only recover-provision print-build-schedule build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
+.PHONY: help init validate validate-unattend build build-versions build-version build-install build-provision-only build-provision-sysprep-only recover-provision print-build-schedule build-2022 build-2025 build-push download-virtio stage-virtio push-quay optimize-image image-size boot-test boot-test-all boot-test-2022 boot-test-2025 boot-test-image inspect-image extract-sysprep-log clean clean-force
 
 help:
 	@echo "Targets:"
 	@echo "  init            Install Packer plugins"
-	@echo "  validate        Validate Packer templates"
+	@echo "  validate        Validate Packer templates and unattend answer files"
 	@echo "  build                  Build $(BUILD_VERSIONS) sequentially (install + provision + sysprep)"
 	@echo "  build-version          Build one version: make build-version VERSION=2025"
 	@echo "  build-install          Pass 1 only: make build-install VERSION=2025"
@@ -62,11 +65,15 @@ help:
 	@echo "  PACKER_ON_ERROR=abort (default) keeps qcow2 on Ctrl+C; use make clean to wipe output/"
 
 init:
-	cd $(PACKER_DIR) && packer init .
+	cd $(PACKER_DIR) && $(PACKER) init .
 
 validate: init
 	./scripts/prepare-ci-validate.sh
-	cd $(PACKER_DIR) && packer validate -var-file=$(VALIDATE_VAR_FILE) .
+	./scripts/validate-unattend.sh
+	cd $(PACKER_DIR) && $(PACKER) validate -var-file=$(VALIDATE_VAR_FILE) .
+
+validate-unattend: init
+	./scripts/validate-unattend.sh
 
 build: stage-virtio init
 	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
@@ -103,7 +110,7 @@ build-version-bios:
 	mkdir -p "output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR)"
 	rm -f output/windows-server-$(VERSION)-*.qcow2 packer/output/windows-server-$(VERSION)-*.qcow2 \
 		packer/output/packer-win$(VERSION)-* 2>/dev/null || true
-	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var efi_boot=false \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
@@ -148,7 +155,7 @@ build-version-uefi:
 	echo "=== Phase 2/3: Packer provision prep (SeaBIOS, mbr2gpt, VirtIO, shrink — no sysprep) ==="; \
 	echo "  Install disk: $$install"; \
 	echo ""; \
-	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var base_image_path=$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
@@ -168,7 +175,7 @@ build-install: stage-virtio init
 	@BUILD_SCHEDULE_LOG="output/$(PACKER_STAGING)/build-schedule.log" ./scripts/print-build-schedule.sh install-only; \
 	echo ""
 	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true
-	cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		$(PACKER_ONLY_INSTALL) .
 
@@ -203,7 +210,7 @@ build-provision-only: stage-virtio init
 	    echo ""; \
 	    prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
 	    if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
-	    cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	    cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 	      -var windows_edition=$(WINDOWS_EDITION) \
 	      $$prov_args \
 	      $$only .; \
@@ -219,7 +226,7 @@ build-provision-only: stage-virtio init
 	  echo ""; \
 	  prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
 	  if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
-	  cd $(PACKER_DIR) && packer build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	  cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 	    -var windows_edition=$(WINDOWS_EDITION) \
 	    $$prov_args \
 	    $$only .; \

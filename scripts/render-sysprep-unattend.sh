@@ -8,11 +8,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 VERSION="${VERSION:-2022}"
+# shellcheck source=scripts/resolve-packer.sh
+source "$ROOT/scripts/resolve-packer.sh"
+PACKER_BIN="$(resolve_packer)"
 
 cd "$ROOT/packer"
 render() {
   local local_name="$1"
-  packer console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" . <<EOF | sed -n '/^<?xml/,/^<\/unattend>/p'
+  "$PACKER_BIN" console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" . <<EOF | sed -n '/^<?xml/,/^<\/unattend>/p'
 ${local_name}
 EOF
 }

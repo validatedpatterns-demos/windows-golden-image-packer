@@ -32,6 +32,9 @@ fi
 [[ -n "$VERSION" ]] || { echo "ERROR: could not infer VERSION from BASE_IMAGE" >&2; exit 1; }
 
 PACKER_DIR="$ROOT/packer"
+# shellcheck source=scripts/resolve-packer.sh
+source "$ROOT/scripts/resolve-packer.sh"
+PACKER_BIN="$(resolve_packer)"
 VAR_FILE="${VAR_FILE:-build.pkrvars.hcl}"
 if [[ "$VAR_FILE" != /* ]]; then
   VAR_FILE="$ROOT/$VAR_FILE"
@@ -58,7 +61,7 @@ echo "  If sysprep exceeds 45 minutes it fails with diagnostics (SYSPREP_TIMEOUT
 echo ""
 
 cd "$PACKER_DIR"
-packer build -force -on-error="$PACKER_ON_ERROR" "$VAR_FILE_FLAG" \
+"$PACKER_BIN" build -force -on-error="$PACKER_ON_ERROR" "$VAR_FILE_FLAG" \
   -var "windows_version=$VERSION" \
   -var "windows_edition=$WINDOWS_EDITION" \
   -var "base_image_path=$BASE_IMAGE" \

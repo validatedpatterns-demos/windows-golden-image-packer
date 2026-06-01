@@ -10,6 +10,9 @@ PACKER_DIR="$ROOT/packer"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 VERSION="${VERSION:-2022}"
 UEFI="${UEFI:-1}"
+# shellcheck source=scripts/resolve-packer.sh
+source "$ROOT/scripts/resolve-packer.sh"
+PACKER_BIN="$(resolve_packer)"
 
 if [[ ! -f "$VAR_FILE" ]]; then
   echo "Var file not found: $VAR_FILE (copy example.pkrvars.hcl to build.pkrvars.hcl)" >&2
@@ -17,7 +20,7 @@ if [[ ! -f "$VAR_FILE" ]]; then
 fi
 
 cd "$PACKER_DIR"
-packer init -upgrade . >/dev/null
+"$PACKER_BIN" init -upgrade . >/dev/null
 
 EFI_FLAG="-var=efi_boot=true"
 if [[ "$UEFI" != "1" ]]; then
@@ -33,7 +36,7 @@ rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 
 # shellcheck disable=SC2016
-packer console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" $EFI_FLAG $SHUTDOWN_FLAG . <<'EOF' | sed -n '/^<?xml/,/^<\/unattend>/p' >"$rendered"
+"$PACKER_BIN" console -var-file="../$(basename "$VAR_FILE")" -var "windows_version=${VERSION}" $EFI_FLAG $SHUTDOWN_FLAG . <<'EOF' | sed -n '/^<?xml/,/^<\/unattend>/p' >"$rendered"
 local.autounattend
 EOF
 
