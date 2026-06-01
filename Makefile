@@ -166,8 +166,7 @@ build-version-uefi:
 	echo "=== Phase 3/3: OVMF sysprep (BCD generalize requires UEFI firmware) ==="; \
 	echo "  Prep disk: $$prep_disk"; \
 	echo ""; \
-	./scripts/run-packer-provision-sysprep.sh "$$prep_disk" "$$staging" "$(VERSION)"; \
-	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
+	./scripts/run-packer-provision-sysprep.sh "$$prep_disk" "$$staging" "$(VERSION)"
 
 build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)

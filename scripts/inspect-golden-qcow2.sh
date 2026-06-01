@@ -60,7 +60,7 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivex
         virtio_rc=1
       fi
     done
-    cdd_blk="$(hivexget "$tmp_hive" '\\ControlSet001\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001' Service 2>/dev/null || echo missing)"
+    cdd_blk="$(hivexget "$tmp_hive" "\\ControlSet001\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001" Service 2>/dev/null || echo missing)"
     echo "  CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> $cdd_blk (expect viostor for bus=virtio)"
     if [[ "$cdd_blk" != viostor ]]; then
       echo "  FAIL: missing viostor CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
