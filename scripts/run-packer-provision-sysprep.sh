@@ -43,7 +43,6 @@ fi
   echo "Var file not found: $VAR_FILE (copy example.pkrvars.hcl to build.pkrvars.hcl)" >&2
   exit 1
 }
-VAR_FILE_FLAG="-var-file=$VAR_FILE"
 PACKER_ON_ERROR="${PACKER_ON_ERROR:-abort}"
 WINDOWS_EDITION="${WINDOWS_EDITION:-Standard}"
 WORK_DIR="$STAGING/work"
@@ -61,10 +60,24 @@ echo "  If sysprep exceeds 45 minutes it fails with diagnostics (SYSPREP_TIMEOUT
 echo ""
 
 cd "$PACKER_DIR"
-"$PACKER_BIN" build -force -on-error="$PACKER_ON_ERROR" "$VAR_FILE_FLAG" \
-  -var "windows_version=$VERSION" \
-  -var "windows_edition=$WINDOWS_EDITION" \
-  -var "base_image_path=$BASE_IMAGE" \
-  -var "output_directory=$WORK_DIR" \
-  -only=windows-golden-provision-gpt-sysprep.qemu.from_install_gpt \
+packer_args=(
+  build
+  -force
+  "-on-error=${PACKER_ON_ERROR}"
+  "-var-file=${VAR_FILE}"
+  "-var=windows_version=${VERSION}"
+  "-var=windows_edition=${WINDOWS_EDITION}"
+  "-var=base_image_path=${BASE_IMAGE}"
+  "-var=output_directory=${WORK_DIR}"
+  -only=windows-golden-provision-gpt-sysprep.qemu.from_install_gpt
   .
+)
+"$PACKER_BIN" "${packer_args[@]}"
+
+edition_lc="$(echo "${WINDOWS_EDITION}" | tr '[:upper:]' '[:lower:]')"
+vm_name="packer-win${VERSION}-${edition_lc}-provision"
+output_name="windows-server-${VERSION}-${edition_lc}.qcow2"
+bash "$ROOT/scripts/finalize-packer-output.sh" "$WORK_DIR" "$vm_name" "$output_name"
+
+STAGING_NAME="$(basename "$STAGING")"
+"$ROOT/scripts/promote-golden-output.sh" "$VERSION" "$STAGING_NAME"
