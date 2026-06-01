@@ -319,7 +319,7 @@ try {
         Write-Host "sysprep.exe exited with code $codeLabel"
         Save-SysprepDiagnostics "sysprep exit $codeLabel"
         Write-SysprepDiagnosticLogs
-        Write-Host "Common causes of exit $codeLabel: Appx/Edge (see setuperr.log), sysprep already run on this disk, or invalid generalize unattend."
+        Write-Host "Common causes of exit ${codeLabel}: Appx/Edge (see setuperr.log), sysprep already run on this disk, or invalid generalize unattend."
         Write-Host "Extract logs: make extract-sysprep-log IMAGE=<qcow2 from work/>"
         exit 1
     }
