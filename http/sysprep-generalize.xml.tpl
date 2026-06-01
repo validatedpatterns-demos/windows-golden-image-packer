@@ -16,10 +16,9 @@
       <TimeZone>UTC</TimeZone>
     </component>
   </settings>
-  <!-- generalize pass: SkipRearm only. RunSynchronous and Reseal are invalid here
-       (RunSynchronous: specialize/auditUser; Reseal: auditSystem/auditUser/oobeSystem).
-       OOBE unattend staging is handled by scripts/sysprep.ps1; /oobe on the command line
-       selects OOBE after generalize. -->
+  <!-- generalize pass: SkipRearm only. Do not set PersistAllDeviceInstalls here — the sysprep
+       VM uses SATA while deploy uses VirtIO (OpenShift disk.bus=virtio). Re-bind viostor/vioscsi
+       after sysprep in restore-virtio-boot-after-sysprep.ps1 instead. -->
   <settings pass="generalize">
     <component name="Microsoft-Windows-Security-SPP" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">

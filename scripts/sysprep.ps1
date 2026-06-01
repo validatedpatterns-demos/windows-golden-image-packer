@@ -2,7 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Generalize the image for cloning in OpenShift Virtualization (KubeVirt).
+param(
+    [switch]$ProvisionerRun
+)
+
 $ErrorActionPreference = 'Stop'
+
+if (-not $ProvisionerRun -and $env:SYSPREP_PROVISIONER_RUN -eq '1') {
+    $ProvisionerRun = $true
+}
 
 $goldenData = 'C:\ProgramData\GoldenImage'
 $generalizeUnattend = 'C:\Windows\Temp\sysprep-generalize.xml'
@@ -22,6 +30,37 @@ function Resolve-OobeUnattendPath {
         return $oobeUnattendPersistent
     }
     throw "Missing OOBE unattend (expected $oobeUnattend or $oobeUnattendPersistent). Disk shrink may have removed Temp copies before sysprep; rebuild with current scripts."
+}
+
+function Restore-OobeUnattend {
+    param(
+        [string]$Reason
+    )
+
+    $oobeSource = Resolve-OobeUnattendPath
+
+    foreach ($dir in @($panther, $sysprepPanther)) {
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        Get-ChildItem -Path $dir -Filter 'unattend*.xml' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+
+    Copy-Item -Path $oobeSource -Destination (Join-Path $panther 'unattend.xml') -Force
+    Copy-Item -Path $oobeSource -Destination 'C:\unattend.xml' -Force
+    if (Test-Path $sysprepPanther) {
+        Copy-Item -Path $oobeSource -Destination (Join-Path $sysprepPanther 'unattend.xml') -Force
+    }
+
+    $oobeXml = Get-Content -Path (Join-Path $panther 'unattend.xml') -Raw
+    if ($oobeXml -notmatch 'Microsoft-Windows-International-Core') {
+        throw "Panther unattend after restore ($Reason) is missing Microsoft-Windows-International-Core"
+    }
+    if ($oobeXml -match 'pass="generalize"') {
+        throw "Panther unattend after restore ($Reason) is still sysprep-generalize.xml"
+    }
+    Write-Host "Restored OOBE-only unattend ($Reason)"
 }
 
 function Get-LogTail {
@@ -162,6 +201,28 @@ function Invoke-GuestShutdown {
     Write-Host 'Shutdown requested; Packer will wait for the VM to power off.'
 }
 
+function Remove-PhantomVirtioBootDevices {
+    # Phantom VirtIO block/SCSI devices from enable-virtio-*-boot-load.ps1 can block generalize.
+    $enum = & pnputil.exe /enum-devices /class SCSIAdapter 2>&1
+    foreach ($line in $enum) {
+        if ($line -notmatch 'Instance ID:\s+(ROOT\\.*)') { continue }
+        $instanceId = $Matches[1].Trim()
+        if ($instanceId -match 'VIOSTORBOOT|VIOSCSIBOOT|VIOSTOR|VIOSCSI') {
+            Write-Host "Removing phantom VirtIO adapter before sysprep: $instanceId"
+            & pnputil.exe /remove-device $instanceId 2>&1 | Out-Host
+        }
+    }
+}
+
+function Test-SysprepNotAlreadyGeneralized {
+    $key = 'HKLM:\SYSTEM\Setup\Status\SysprepStatus'
+    if (-not (Test-Path $key)) { return }
+    $state = (Get-ItemProperty -Path $key -Name 'GeneralizationState' -ErrorAction SilentlyContinue).GeneralizationState
+    if ($null -ne $state -and [int]$state -ge 7) {
+        throw "Sysprep already completed on this disk (GeneralizationState=$state). Use a fresh provision-prep qcow2 from MBR pass, not a sysprepped or work/ disk."
+    }
+}
+
 try {
     $clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
     if (Test-Path $clearScript) {
@@ -191,6 +252,8 @@ try {
         }
     }
 
+    Test-SysprepNotAlreadyGeneralized
+
     $sysprepStatus = 'HKLM:\SYSTEM\Setup\Status\SysprepStatus'
     if (Test-Path $sysprepStatus) {
         Remove-Item -Path $sysprepStatus -Recurse -Force -ErrorAction SilentlyContinue
@@ -204,17 +267,7 @@ try {
     [void][xml](Get-Content -Path $generalizeUnattend -Raw)
     [void][xml](Get-Content -Path $oobeSource -Raw)
 
-    New-Item -ItemType Directory -Path $panther -Force | Out-Null
-    Copy-Item -Path $oobeSource -Destination (Join-Path $panther 'unattend.xml') -Force
-    Copy-Item -Path $oobeSource -Destination 'C:\unattend.xml' -Force
-    $oobeXml = Get-Content -Path (Join-Path $panther 'unattend.xml') -Raw
-    if ($oobeXml -notmatch 'Microsoft-Windows-International-Core') {
-        throw 'Panther unattend missing International-Core before sysprep - not sysprep-oobe.xml'
-    }
-    if ($oobeXml -match '<AutoLogon>[\s\S]*?<Enabled>true</Enabled>') {
-        throw 'Panther unattend still has install AutoLogon - replace with sysprep-oobe.xml before sysprep'
-    }
-    Write-Host "Staged OOBE-only unattend in Panther for first deploy boot"
+    Restore-OobeUnattend -Reason 'before sysprep generalize'
 
     if (-not (Test-Path $oobeUnattendPersistent)) {
         throw "Missing $oobeUnattendPersistent (configure-oobe-locale.ps1 must run before sysprep)"
@@ -228,6 +281,8 @@ try {
     }
 
     Repair-UefiBootIfNeeded
+
+    Remove-PhantomVirtioBootDevices
 
     . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
     if (Get-Command Test-EdgeSysprepReady -ErrorAction SilentlyContinue) {
@@ -264,28 +319,31 @@ try {
         Write-Host "sysprep.exe exited with code $codeLabel"
         Save-SysprepDiagnostics "sysprep exit $codeLabel"
         Write-SysprepDiagnosticLogs
-        throw "sysprep.exe failed (exit $codeLabel). Diagnostics saved to $diagLog; extract with: make extract-sysprep-log IMAGE=<qcow2>"
+        Write-Host "Common causes of exit $codeLabel: Appx/Edge (see setuperr.log), sysprep already run on this disk, or invalid generalize unattend."
+        Write-Host "Extract logs: make extract-sysprep-log IMAGE=<qcow2 from work/>"
+        exit 1
     }
 
     # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
-    $oobeSource = Resolve-OobeUnattendPath
-    Copy-Item -Path $oobeSource -Destination (Join-Path $panther 'unattend.xml') -Force
-    Copy-Item -Path $oobeSource -Destination 'C:\unattend.xml' -Force
-    $oobeXml = Get-Content -Path (Join-Path $panther 'unattend.xml') -Raw
-    if ($oobeXml -notmatch 'Microsoft-Windows-International-Core') {
-        throw 'Panther unattend after sysprep is missing Microsoft-Windows-International-Core'
-    }
-    if ($oobeXml -match 'pass="generalize"') {
-        throw 'Panther unattend after sysprep is still sysprep-generalize.xml'
-    }
-    Write-Host 'Restored OOBE-only unattend in Panther after sysprep generalize'
+    Restore-OobeUnattend -Reason 'after sysprep generalize'
 
-    Invoke-GuestShutdown
+    $restoreVirtio = Join-Path $PSScriptRoot 'restore-virtio-boot-after-sysprep.ps1'
+    if (-not (Test-Path -LiteralPath $restoreVirtio)) {
+        throw "Missing $restoreVirtio"
+    }
+    & $restoreVirtio
+
+    if ($ProvisionerRun) {
+        Write-Host 'Sysprep finished under Packer provisioner; Packer shutdown_command will power off the guest.'
+    }
+    else {
+        Invoke-GuestShutdown
+    }
 }
 catch {
     if (-not (Test-Path $diagLog)) {
         Save-SysprepDiagnostics $_.Exception.Message
         Write-SysprepDiagnosticLogs
     }
-    throw
+    exit 1
 }

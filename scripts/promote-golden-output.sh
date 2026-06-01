@@ -48,8 +48,14 @@ for src in "${matches[@]}"; do
   chown "$(id -un):$(id -gn)" "$dest" 2>/dev/null || true
   chmod u+rw "$dest" 2>/dev/null || true
   echo "Golden image: $dest"
+  if [[ -x "$ROOT/scripts/repair-golden-panther-unattend.sh" ]]; then
+    "$ROOT/scripts/repair-golden-panther-unattend.sh" "$dest"
+  fi
   if [[ -x "$ROOT/scripts/inspect-golden-unattend.sh" ]]; then
     "$ROOT/scripts/inspect-golden-unattend.sh" "$dest"
+  fi
+  if [[ -x "$ROOT/scripts/inspect-golden-qcow2.sh" ]]; then
+    INSPECT_VIRTIO_STRICT=1 "$ROOT/scripts/inspect-golden-qcow2.sh" "$dest" >/dev/null
   fi
 done
 

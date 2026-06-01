@@ -3,6 +3,10 @@
 
 # Install VirtIO storage, network, balloon, and SCSI drivers from WinRM-staged or PROVISION CD media.
 # Marks block/SCSI drivers boot-start so the image can boot with disk.bus virtio on OpenShift/KubeVirt.
+param(
+    [switch]$SkipMain
+)
+
 $ErrorActionPreference = 'Stop'
 
 function Get-CdRomDriveLetters {
@@ -205,46 +209,60 @@ function Confirm-BootDrivers {
     }
 }
 
-$virtioOsDir = Get-TargetVirtioOsDir
-$mediaRoot = Find-VirtioMediaRoot -OsDir $virtioOsDir
-$virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot -OsDir $virtioOsDir
-$driverPaths = Get-DriverSearchPaths -DriveRoot $mediaRoot -OsDir $virtioOsDir
+function Install-VirtioBootBinding {
+    param(
+        [string]$MediaRoot,
+        [string]$VirtioOsDir
+    )
 
-Write-Host "VirtIO media: $mediaRoot (OS dir: $virtioOsDir)"
-Write-Host 'Installing VirtIO drivers from paths:'
-$driverPaths | ForEach-Object { Write-Host "  $_" }
+    $viostorInf = Join-Path $MediaRoot "viostor\$VirtioOsDir\amd64\viostor.inf"
+    $vioscsiInf = Join-Path $MediaRoot "vioscsi\$VirtioOsDir\amd64\vioscsi.inf"
 
-foreach ($path in $driverPaths) {
-    pnputil.exe /add-driver (Join-Path $path '*.inf') /install | Out-Host
+    Ensure-BootDriverStaged -ServiceName 'viostor' -SysFileName 'viostor.sys' -InfPath $viostorInf
+    Ensure-BootDriverStaged -ServiceName 'vioscsi' -SysFileName 'vioscsi.sys' -InfPath $vioscsiInf
+
+    Set-VirtioCriticalDeviceDatabase -ServiceName 'viostor' -RelativePaths @(
+        'pci#ven_1af4&dev_1001',
+        'pci#ven_1af4&dev_1001&subsys_00021af4&rev_00',
+        'pci#ven_1af4&dev_1042&subsys_11001af4&rev_01'
+    )
+
+    $enableBlkBoot = Join-Path $PSScriptRoot 'enable-virtio-blk-boot-load.ps1'
+    if (-not (Test-Path -LiteralPath $enableBlkBoot)) {
+        throw "Missing $enableBlkBoot"
+    }
+    & $enableBlkBoot -InfPath $viostorInf
+
+    $enableScsiBoot = Join-Path $PSScriptRoot 'enable-virtio-scsi-boot-load.ps1'
+    if (-not (Test-Path -LiteralPath $enableScsiBoot)) {
+        throw "Missing $enableScsiBoot"
+    }
+    & $enableScsiBoot -InfPath $vioscsiInf
+
+    Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
 }
 
-# Explicit INF install for storage controllers used by KubeVirt disk.bus virtio / virtio-scsi.
-$viostorInf = Join-Path $mediaRoot "viostor\$virtioOsDir\amd64\viostor.inf"
-$vioscsiInf = Join-Path $mediaRoot "vioscsi\$virtioOsDir\amd64\vioscsi.inf"
-$netkvmInf = Join-Path $mediaRoot "NetKVM\$virtioOsDir\amd64\netkvm.inf"
+function Install-VirtioDriversMain {
+    $virtioOsDir = Get-TargetVirtioOsDir
+    $mediaRoot = Find-VirtioMediaRoot -OsDir $virtioOsDir
+    $virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot -OsDir $virtioOsDir
+    $driverPaths = Get-DriverSearchPaths -DriveRoot $mediaRoot -OsDir $virtioOsDir
 
-Ensure-BootDriverStaged -ServiceName 'viostor' -SysFileName 'viostor.sys' -InfPath $viostorInf
-Ensure-BootDriverStaged -ServiceName 'vioscsi' -SysFileName 'vioscsi.sys' -InfPath $vioscsiInf
-Install-DriverPackage -InfPath $netkvmInf | Out-Null
+    Write-Host "VirtIO media: $mediaRoot (OS dir: $virtioOsDir)"
+    Write-Host 'Installing VirtIO drivers from paths:'
+    $driverPaths | ForEach-Object { Write-Host "  $_" }
 
-Set-VirtioCriticalDeviceDatabase -ServiceName 'viostor' -RelativePaths @(
-    'pci#ven_1af4&dev_1001',
-    'pci#ven_1af4&dev_1001&subsys_00021af4&rev_00',
-    'pci#ven_1af4&dev_1042&subsys_11001af4&rev_01'
-)
+    foreach ($path in $driverPaths) {
+        pnputil.exe /add-driver (Join-Path $path '*.inf') /install | Out-Host
+    }
 
-$enableBlkBoot = Join-Path $PSScriptRoot 'enable-virtio-blk-boot-load.ps1'
-if (-not (Test-Path -LiteralPath $enableBlkBoot)) {
-    throw "Missing $enableBlkBoot"
+    $netkvmInf = Join-Path $mediaRoot "NetKVM\$virtioOsDir\amd64\netkvm.inf"
+    Install-DriverPackage -InfPath $netkvmInf | Out-Null
+
+    Install-VirtioBootBinding -MediaRoot $mediaRoot -VirtioOsDir $virtioOsDir
+    Write-Host 'VirtIO driver installation complete (viostor/vioscsi boot-start + virtio blk/scsi boot binding).'
 }
-& $enableBlkBoot -InfPath $viostorInf
 
-$enableScsiBoot = Join-Path $PSScriptRoot 'enable-virtio-scsi-boot-load.ps1'
-if (-not (Test-Path -LiteralPath $enableScsiBoot)) {
-    throw "Missing $enableScsiBoot"
+if (-not $SkipMain) {
+    Install-VirtioDriversMain
 }
-& $enableScsiBoot -InfPath $vioscsiInf
-
-Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
-
-Write-Host 'VirtIO driver installation complete (viostor/vioscsi boot-start + virtio blk/scsi boot binding).'

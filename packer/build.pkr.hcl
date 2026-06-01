@@ -53,7 +53,7 @@ source "qemu" "windows" {
   winrm_use_ssl  = false
   winrm_port     = 5985
 
-  shutdown_command = "powershell -ExecutionPolicy Bypass -File C:/Windows/Temp/sysprep.ps1"
+  shutdown_command = "shutdown /s /t 0 /f"
   shutdown_timeout = "90m"
 }
 
@@ -110,6 +110,11 @@ build {
 
   provisioner "windows-restart" {
     restart_timeout = "30m"
+  }
+
+  provisioner "powershell" {
+    environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
+    scripts          = ["${path.root}/../scripts/sysprep.ps1"]
   }
 
   post-processor "shell-local" {

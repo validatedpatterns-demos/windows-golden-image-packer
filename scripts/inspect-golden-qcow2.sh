@@ -46,6 +46,7 @@ else
   echo "Install libguestfs-tools (virt-filesystems) for partition inspection." >&2
 fi
 
+virtio_rc=0
 if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivexget >/dev/null 2>&1; then
   tmp_hive="$(mktemp)"
   if libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then
@@ -53,16 +54,25 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivex
     echo "VirtIO boot-start (offline registry):"
     for svc in viostor vioscsi; do
       start="$(hivexget "$tmp_hive" "\\ControlSet001\\Services\\$svc" Start 2>/dev/null || echo missing)"
-      echo "  $svc Start=$start (expect 0 for virtio-scsi boot)"
+      echo "  $svc Start=$start (expect 0 for virtio boot)"
+      if [[ "$start" != 0 ]]; then
+        echo "  FAIL: $svc is not boot-start (sysprep stripped drivers; rebuild with restore-virtio-boot-after-sysprep.ps1)" >&2
+        virtio_rc=1
+      fi
     done
     cdd_blk="$(hivexget "$tmp_hive" '\\ControlSet001\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001' Service 2>/dev/null || echo missing)"
     echo "  CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> $cdd_blk (expect viostor for bus=virtio)"
     if [[ "$cdd_blk" != viostor ]]; then
-      echo "  WARN: rebuild golden with enable-virtio-blk-boot-load.ps1 or boot-test with BOOT_TEST_DISK_BUS=sata"
+      echo "  FAIL: missing viostor CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
+      virtio_rc=1
     fi
   fi
   rm -f "$tmp_hive"
 elif [[ ! -r "$IMAGE" ]]; then
   echo ""
   echo "VirtIO registry check skipped (image not readable — chown golden qcow2 to your user first)." >&2
+fi
+
+if [[ "${INSPECT_VIRTIO_STRICT:-1}" != 0 && "$virtio_rc" -ne 0 ]]; then
+  exit 1
 fi
