@@ -48,6 +48,11 @@ for src in "${matches[@]}"; do
   chown "$(id -un):$(id -gn)" "$dest" 2>/dev/null || true
   chmod u+rw "$dest" 2>/dev/null || true
   echo "Golden image: $dest"
+  if [[ ! -r "$dest" ]] && [[ -x "$ROOT/scripts/libvirt-vm-disk.sh" ]]; then
+    # shellcheck source=scripts/libvirt-vm-disk.sh
+    source "$ROOT/scripts/libvirt-vm-disk.sh"
+    libvirt_reclaim_backing_for_build_user "$dest" 2>/dev/null || true
+  fi
   if [[ -x "$ROOT/scripts/repair-golden-panther-unattend.sh" ]]; then
     "$ROOT/scripts/repair-golden-panther-unattend.sh" "$dest"
   fi

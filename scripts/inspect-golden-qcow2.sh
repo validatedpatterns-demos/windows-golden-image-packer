@@ -47,25 +47,74 @@ else
 fi
 
 virtio_rc=0
+inspect_hive_control_set() {
+  local hive="$1"
+  local cs="$2"
+  local svc start cdd_blk cdd_scsi found=0
+
+  for svc in viostor vioscsi; do
+    start="$(hivexget "$hive" "\\${cs}\\Services\\${svc}" Start 2>/dev/null || true)"
+    [[ -n "$start" ]] || continue
+    found=1
+    echo "  ${cs} ${svc} Start=${start} (expect 0)"
+    if [[ "$start" != 0 ]]; then
+      echo "  FAIL: ${cs} ${svc} is not boot-start (sysprep left a stale control set without VirtIO drivers)" >&2
+      virtio_rc=1
+    fi
+  done
+
+  cdd_blk="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001" Service 2>/dev/null || true)"
+  if [[ -n "$cdd_blk" ]]; then
+    found=1
+    echo "  ${cs} CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> ${cdd_blk} (expect viostor)"
+    if [[ "$cdd_blk" != viostor ]]; then
+      echo "  FAIL: ${cs} missing viostor CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
+      virtio_rc=1
+    fi
+  fi
+
+  cdd_scsi="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1004" Service 2>/dev/null || true)"
+  if [[ -n "$cdd_scsi" ]]; then
+    echo "  ${cs} CriticalDeviceDatabase pci#ven_1af4&dev_1004 -> ${cdd_scsi} (expect vioscsi)"
+    if [[ "$cdd_scsi" != vioscsi ]]; then
+      echo "  FAIL: ${cs} missing vioscsi CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=scsi)" >&2
+      virtio_rc=1
+    fi
+  fi
+
+  [[ "$found" -eq 1 ]]
+}
+
 if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivexget >/dev/null 2>&1; then
   tmp_hive="$(mktemp)"
   if libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then
     echo ""
     echo "VirtIO boot-start (offline registry):"
-    for svc in viostor vioscsi; do
-      start="$(hivexget "$tmp_hive" "\\ControlSet001\\Services\\$svc" Start 2>/dev/null || echo missing)"
-      echo "  $svc Start=$start (expect 0 for virtio boot)"
-      if [[ "$start" != 0 ]]; then
-        echo "  FAIL: $svc is not boot-start (sysprep stripped drivers; rebuild with restore-virtio-boot-after-sysprep.ps1)" >&2
-        virtio_rc=1
+    default_cs_num="$(hivexget "$tmp_hive" "\\Select" Default 2>/dev/null || echo 1)"
+    default_cs_num="${default_cs_num//$'\r'/}"
+    default_cs="$(printf 'ControlSet%03d' "$default_cs_num")"
+    echo "  Select Default=${default_cs_num} (${default_cs})"
+
+    any_cs=0
+    for i in $(seq 1 9); do
+      cs="$(printf 'ControlSet%03d' "$i")"
+      if inspect_hive_control_set "$tmp_hive" "$cs"; then
+        any_cs=1
       fi
     done
-    cdd_blk="$(hivexget "$tmp_hive" "\\ControlSet001\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001" Service 2>/dev/null || echo missing)"
-    echo "  CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> $cdd_blk (expect viostor for bus=virtio)"
-    if [[ "$cdd_blk" != viostor ]]; then
-      echo "  FAIL: missing viostor CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
+    if [[ "$any_cs" -eq 0 ]]; then
+      echo "  FAIL: no VirtIO boot driver keys in any ControlSet00N hive" >&2
       virtio_rc=1
     fi
+
+    for driver in viostor.sys vioscsi.sys; do
+      if ! libguestfs_direct guestfish --ro -a "$IMAGE" -i is-file "/Windows/System32/drivers/$driver" >/dev/null 2>&1; then
+        echo "  FAIL: missing /Windows/System32/drivers/$driver" >&2
+        virtio_rc=1
+      else
+        echo "  driver binary present: $driver"
+      fi
+    done
   fi
   rm -f "$tmp_hive"
 elif [[ ! -r "$IMAGE" ]]; then

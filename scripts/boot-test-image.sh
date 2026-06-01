@@ -37,7 +37,7 @@ source "$ROOT/scripts/libvirt-vm-disk.sh"
 # shellcheck source=scripts/packer-ovmf-sysprep-qemu.sh
 source "$ROOT/scripts/packer-ovmf-sysprep-qemu.sh"
 
-CONNECT="${BOOT_TEST_CONNECT:-qemu:///system}"
+CONNECT="${BOOT_TEST_CONNECT:-$(libvirt_default_connect)}"
 METHOD="${BOOT_TEST_METHOD:-}"
 
 default_firmware() {

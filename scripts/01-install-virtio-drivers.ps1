@@ -209,6 +209,79 @@ function Confirm-BootDrivers {
     }
 }
 
+function Copy-RegKeyTree {
+    param(
+        [string]$SourcePath,
+        [string]$DestPath
+    )
+
+    & reg.exe copy $SourcePath $DestPath /s /f | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "reg.exe copy failed ($LASTEXITCODE): $SourcePath -> $DestPath"
+    }
+}
+
+function Sync-VirtioBootRegistryToAllControlSets {
+    # sysprep /generalize can leave a numbered ControlSet00N without VirtIO boot keys while
+    # CurrentControlSet has them after restore-virtio-boot-after-sysprep.ps1. First deploy boot
+    # may load the stale set -> INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio.
+    $sourceRoot = 'HKLM\SYSTEM\CurrentControlSet'
+    $cddEntries = @(
+        @{ Service = 'viostor'; Paths = @(
+            'pci#ven_1af4&dev_1001',
+            'pci#ven_1af4&dev_1001&subsys_00021af4&rev_00',
+            'pci#ven_1af4&dev_1042&subsys_11001af4&rev_01'
+        ) },
+        @{ Service = 'vioscsi'; Paths = @(
+            'pci#ven_1af4&dev_1004',
+            'pci#ven_1af4&dev_1004&subsys_00081af4&rev_00',
+            'pci#ven_1af4&dev_1048&subsys_11001af4&rev_01'
+        ) }
+    )
+
+    $select = Get-ItemProperty -Path 'HKLM:\SYSTEM\Select' -ErrorAction SilentlyContinue
+    $currentCs = if ($null -ne $select.Current) { "ControlSet$('{0:D3}' -f [int]$select.Current)" } else { 'ControlSet001' }
+
+    $destSets = @()
+    Get-ChildItem -Path 'HKLM:\SYSTEM' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^ControlSet\d+$' } |
+        ForEach-Object { $destSets += $_.PSChildName }
+    if ($destSets.Count -eq 0) {
+        $destSets = @('ControlSet001')
+    }
+
+    foreach ($cs in ($destSets | Select-Object -Unique)) {
+        if ($cs -eq $currentCs) {
+            continue
+        }
+
+        $destRoot = "HKLM\SYSTEM\$cs"
+        foreach ($svc in @('viostor', 'vioscsi')) {
+            $srcSvc = "$sourceRoot\Services\$svc"
+            $dstSvc = "$destRoot\Services\$svc"
+            if (-not (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$svc")) {
+                throw "Source service key missing: $svc"
+            }
+            Write-Host "Sync VirtIO boot service $svc -> $cs"
+            Copy-RegKeyTree -SourcePath $srcSvc -DestPath $dstSvc
+        }
+
+        foreach ($entry in $cddEntries) {
+            foreach ($rel in $entry.Paths) {
+                $srcCdd = "$sourceRoot\Control\CriticalDeviceDatabase\$rel"
+                $dstCdd = "$destRoot\Control\CriticalDeviceDatabase\$rel"
+                if (-not (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\$rel")) {
+                    continue
+                }
+                Write-Host "Sync CriticalDeviceDatabase $rel -> $cs"
+                Copy-RegKeyTree -SourcePath $srcCdd -DestPath $dstCdd
+            }
+        }
+    }
+
+    Write-Host 'Sync-VirtioBootRegistryToAllControlSets complete'
+}
+
 function Install-VirtioBootBinding {
     param(
         [string]$MediaRoot,
@@ -240,6 +313,7 @@ function Install-VirtioBootBinding {
     & $enableScsiBoot -InfPath $vioscsiInf
 
     Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
+    Sync-VirtioBootRegistryToAllControlSets
 }
 
 function Install-VirtioDriversMain {
