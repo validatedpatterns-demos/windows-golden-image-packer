@@ -9,7 +9,7 @@
 <unattend xmlns="urn:schemas-microsoft-com:unattend"
   xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <settings pass="oobeSystem" wasPassProcessed="false">
+  <settings pass="oobeSystem">
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
@@ -30,7 +30,9 @@
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-${product_key_xml}
+%{if product_key != ""~}
+      <ProductKey>${product_key}</ProductKey>
+%{endif~}
       <AutoLogon>
         <Enabled>false</Enabled>
       </AutoLogon>
@@ -40,8 +42,6 @@ ${product_key_xml}
         <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-        <NetworkLocation>Work</NetworkLocation>
-        <ProtectYourPC>3</ProtectYourPC>
       </OOBE>
       <UserAccounts>
         <AdministratorPassword>

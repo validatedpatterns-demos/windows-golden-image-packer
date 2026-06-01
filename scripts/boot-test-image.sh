@@ -4,15 +4,16 @@
 #!/usr/bin/env bash
 # Boot-test a golden qcow2 without modifying it (overlay qcow2; backing stays read-only).
 #
-# UEFI (default when efi_boot=true): same QEMU launch as the OVMF sysprep Packer pass
-# (q35 + ich9-ahci + e1000 user netdev, no vTPM). SeaBIOS images use libvirt.
+# Default: libvirt on qemu:///system with virtio-scsi disk, virtio NIC, and a guest-agent
+# channel (domifaddr --source agent). Use BOOT_TEST_METHOD=packer to replay the OVMF
+# sysprep Packer QEMU layout (ide.0 + e1000 user netdev, WinRM port forward).
 #
 # Usage:
 #   boot-test-image.sh [options] [IMAGE.qcow2]
 #
 # Environment (defaults shown):
-#   BOOT_TEST_METHOD=packer|libvirt   # default: packer for uefi, libvirt for bios
-#   BOOT_TEST_CONNECT=qemu:///system   # libvirt method only
+#   BOOT_TEST_METHOD=libvirt|packer    # default: libvirt (virtio-scsi + guest-agent on system libvirt)
+#   BOOT_TEST_CONNECT=qemu:///system   # libvirt URI (default; use qemu:///session to skip ACLs)
 #   BOOT_TEST_FIRMWARE=uefi
 #   BOOT_TEST_MEMORY=8192
 #   BOOT_TEST_VCPUS=4
@@ -21,7 +22,8 @@
 #   BOOT_TEST_CHECK_GUEST=1        # packer: WinRM host port; libvirt: guest-agent IP
 #   BOOT_TEST_GRAPHICS=vnc
 #   BOOT_TEST_SHOW_CONSOLE=1
-#   BOOT_TEST_DISK_BUS=sata         # libvirt uefi only
+#   BOOT_TEST_TPM=0                 # default: off (matches provision_sysprep_vtpm=false)
+#   BOOT_TEST_DISK_BUS=virtio         # libvirt uefi: virtio-blk (OpenShift disk.bus: virtio)
 #   BOOT_TEST_KEEP_VM=0
 #   BOOT_TEST_KEEP_DISK=0
 #   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines
@@ -70,6 +72,17 @@ read_hcl() {
     | sed -E 's/^[^=]+=[[:space:]]*"([^"]+)".*/\1/; s/^[^=]+=[[:space:]]*([^"[:space:]]+).*/\1/'
 }
 
+# Sysprep pass runs without vTPM by default; injecting TPM on first deploy boot often BSODs.
+boot_test_tpm_default() {
+  local v
+  v="$("$ROOT/scripts/read-pkrvar.sh" provision_sysprep_vtpm "$VAR_FILE" false)"
+  if [[ "$v" == "true" ]]; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
 usage() {
   sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
@@ -77,13 +90,13 @@ usage() {
   echo "  --image PATH       qcow2 to test (default: newest golden under output/)"
   echo "  --name NAME        libvirt domain name (default: boot-test-<image-basename>)"
   echo "  --firmware bios|uefi"
-  echo "  --method packer|libvirt   default: packer for uefi, libvirt for bios"
+  echo "  --method libvirt|packer   default: libvirt (qemu:///system, virtio-scsi, guest-agent)"
   echo "  --memory MB        --vcpus N"
   echo "  --wait SECONDS     --guest-wait SECONDS"
   echo "  --no-guest-check   skip QEMU guest-agent IP check"
   echo "  --graphics vnc|none"
   echo "  --no-console       do not open virt-viewer"
-  echo "  --disk-bus virtio|sata   root disk bus (default: virtio)"
+  echo "  --disk-bus virtio|scsi|sata   root disk (default: virtio = virtio-blk / OpenShift bus: virtio)"
   echo "  --keep-vm --keep-disk"
   echo "  --dry-run"
   exit "${1:-0}"
@@ -188,11 +201,7 @@ MEMORY="${MEMORY:-8192}"
 VPUS="${VPUS:-4}"
 
 if [[ -z "$METHOD" ]]; then
-  if [[ "$FIRMWARE" == "uefi" ]]; then
-    METHOD=packer
-  else
-    METHOD=libvirt
-  fi
+  METHOD=libvirt
 fi
 
 case "$METHOD" in
@@ -219,6 +228,9 @@ QEMU_PID=""
 
 cleanup() {
   local rc=$?
+  if [[ "$METHOD" == "libvirt" && -n "$IMAGE" && -f "$IMAGE" ]]; then
+    libvirt_reclaim_backing_for_build_user "$IMAGE" 2>/dev/null || true
+  fi
   if [[ "$METHOD" == "packer" && -n "$WORK_DIR" ]]; then
     if [[ "$KEEP_VM" != 1 ]]; then
       packer_ovmf_stop_qemu "$WORK_DIR" 2>/dev/null || true
@@ -244,59 +256,12 @@ require_cmd() {
   done
 }
 
-libvirt_qemu_user() {
-  local u
-  if [[ -r /etc/libvirt/qemu.conf ]]; then
-    u="$(awk -F= '/^[[:space:]]*user[[:space:]]*=/ {
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-      gsub(/"/, "", $2)
-      if ($2 !~ /^\+/) { print $2; exit }
-    }' /etc/libvirt/qemu.conf)"
-  fi
-  if [[ -z "${u:-}" ]] || ! getent passwd "$u" &>/dev/null; then
-    u="qemu"
-  fi
-  echo "$u"
-}
-
 libvirt_uses_system_qemu() {
   [[ "$CONNECT" == qemu://* && "$CONNECT" != *session* ]]
 }
 
-grant_qemu_traverse_parents() {
-  local qemu_user="$1" target="$2" dir
-  target="$(readlink -f "$target")"
-  if [[ -f "$target" ]]; then
-    dir="$(dirname "$target")"
-  else
-    dir="$target"
-  fi
-  while [[ -n "$dir" && "$dir" != "/" ]]; do
-    if ! setfacl -m "u:${qemu_user}:x" "$dir"; then
-      echo "Failed to grant $qemu_user traverse on $dir (install acl?)" >&2
-      return 1
-    fi
-    dir="$(dirname "$dir")"
-  done
-}
-
-grant_qemu_system_storage_access() {
-  local qemu_user disk backing disk_dir
-  command -v setfacl >/dev/null || {
-    echo "setfacl is required for $CONNECT when disks are under your home directory." >&2
-    echo "Install the acl package, or set BOOT_TEST_CONNECT=qemu:///session to run VMs as your user." >&2
-    exit 1
-  }
-  qemu_user="$(libvirt_qemu_user)"
-  disk="$(readlink -f "$1")"
-  backing="$(readlink -f "$2")"
-  grant_qemu_traverse_parents "$qemu_user" "$disk" || exit 1
-  grant_qemu_traverse_parents "$qemu_user" "$backing" || exit 1
-  disk_dir="$(dirname "$disk")"
-  setfacl -m "u:${qemu_user}:rx" "$disk_dir" || exit 1
-  setfacl -m "u:${qemu_user}:rw" "$disk" || exit 1
-  setfacl -m "u:${qemu_user}:r" "$backing" || exit 1
-  echo "Granted $qemu_user ACL access to overlay and backing file." >&2
+prepare_backing_for_overlay() {
+  libvirt_reclaim_backing_for_build_user "$IMAGE" || exit 1
 }
 
 ORIG_SIZE="$(stat -c%s "$IMAGE")"
@@ -323,11 +288,13 @@ if [[ "$METHOD" == "packer" ]]; then
   PACKER_OVMF_VCPUS="$VPUS"
 
   if [[ "$DRY_RUN" == 1 ]]; then
+    echo "[dry-run] libvirt_ensure_build_user_read_file + qemu-img create -b ..."
     echo "[dry-run] packer_ovmf_prepare_workdir + qemu (OVMF sysprep pass: ide.0, qcow2 pflash, no vTPM)"
     packer_ovmf_print_qemu_cmd "$WORK_DIR" "disk.qcow2" "$VM_NAME" 44 4228
     exit 0
   fi
 
+  prepare_backing_for_overlay
   packer_ovmf_prepare_workdir "$WORK_DIR" "$IMAGE" "disk.qcow2"
   VNC_DISPLAY="$(packer_ovmf_pick_vnc_display)"
   WINRM_PORT="$(packer_ovmf_pick_free_port)"
@@ -412,15 +379,16 @@ if [[ "$CONNECT" == qemu:///system ]] && ! virsh --connect "$CONNECT" net-info d
 fi
 
 if [[ "$DRY_RUN" == 1 ]]; then
-  echo "[dry-run] qemu-img create -f qcow2 -F qcow2 -b \"$IMAGE\" \"$TEST_DISK\""
+  echo "[dry-run] libvirt_ensure_build_user_read_file + qemu-img create -f qcow2 -F qcow2 -b \"$IMAGE\" \"$TEST_DISK\""
   echo "[dry-run] virt-install --import ... ($DISK_BUS disk, $FIRMWARE)"
   exit 0
 fi
 
+prepare_backing_for_overlay
 qemu-img create -f qcow2 -F qcow2 -b "$IMAGE" "$TEST_DISK" >/dev/null
 
 if libvirt_uses_system_qemu; then
-  grant_qemu_system_storage_access "$TEST_DISK" "$IMAGE"
+  libvirt_prepare_system_boot_test_disks "$TEST_DISK" "$IMAGE" || exit 1
 fi
 
 if virsh --connect "$CONNECT" dominfo "$VM_NAME" &>/dev/null; then
@@ -439,18 +407,20 @@ if [[ "$FIRMWARE" == "uefi" ]]; then
   MACHINE="q35"
   BOOT_ARGS=()
   libvirt_uefi_import_boot_args "$VAR_FILE" "$ROOT" || exit 1
-  if [[ "${BOOT_TEST_TPM:-1}" == 1 ]]; then
-    if pkrvar_vtpm_enabled "$VAR_FILE" "$ROOT"; then
-      mapfile -t TPM_ARGS < <(libvirt_tpm_args "$VAR_FILE" "$ROOT" 1)
-    fi
+  if [[ "${BOOT_TEST_TPM:-$(boot_test_tpm_default)}" == 1 ]]; then
+    mapfile -t TPM_ARGS < <(libvirt_tpm_args "$VAR_FILE" "$ROOT" 1)
   fi
 fi
 
 libvirt_disk_args "$TEST_DISK" "$DISK_BUS" "" 1
+libvirt_guest_agent_channel_args
 
-echo "Starting VM (import, ${DISK_BUS} root disk, firmware=${FIRMWARE})..." >&2
+echo "Starting VM (import, ${DISK_BUS} root disk, firmware=${FIRMWARE}, guest-agent channel)..." >&2
+echo "libvirt: $CONNECT (system session — use virt-viewer for console)" >&2
 if [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" == "virtio" ]]; then
-  echo "WARN: virtio-blk often fails under OVMF (no bootable device). Prefer BOOT_TEST_DISK_BUS=scsi." >&2
+  echo "Disk: virtio-blk (OpenShift disk.bus: virtio; needs boot-start viostor in golden image)" >&2
+elif [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" == "scsi" ]]; then
+  echo "Disk: virtio-scsi (disk.bus: scsi; needs boot-start vioscsi in golden image)" >&2
 fi
 
 virt-install --connect "$CONNECT" \
@@ -467,6 +437,7 @@ virt-install --connect "$CONNECT" \
   "${DISK_CONTROLLER_ARGS[@]}" \
   "${DISK_DEVICE_ARG[@]}" \
   --network "network=default,model=virtio" \
+  "${LIBVIRT_GUEST_AGENT_CHANNEL_ARGS[@]}" \
   "${GRAPHICS_ARGS[@]}" \
   --noautoconsole
 
@@ -501,7 +472,9 @@ sleep "$WAIT"
 state="$(virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true)"
 if [[ "$state" != "running" ]]; then
   echo "FAIL: VM is not running after ${WAIT}s (state=${state:-unknown})" >&2
-  echo "Hint: first boot after sysprep may reboot during OOBE; try BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900" >&2
+  echo "Hint: sysprep OOBE reboots are normal; try BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900" >&2
+  echo "Hint: INACCESSIBLE_BOOT_DEVICE on virtio -> rebuild golden with enable-virtio-blk-boot-load.ps1." >&2
+  echo "      Ensure BOOT_TEST_TPM=0 (default). Fallback: BOOT_TEST_DISK_BUS=sata." >&2
   virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true
   exit 1
 fi

@@ -83,8 +83,7 @@ if ($LASTEXITCODE -ne 0) {
 foreach ($svc in @('viostor', 'vioscsi')) {
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
     if (-not (Test-Path $key)) {
-        Write-Warning "Boot driver service missing: $svc (run 01-install-virtio-drivers.ps1)"
-        continue
+        throw "Boot driver service missing: $svc (run 01-install-virtio-drivers.ps1 before sysprep)"
     }
     $start = (Get-ItemProperty -Path $key -Name 'Start' -ErrorAction SilentlyContinue).Start
     if ($start -ne 0) {

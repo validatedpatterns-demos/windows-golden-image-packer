@@ -45,6 +45,8 @@ for src in "${matches[@]}"; do
     rm -f "$dest"
   fi
   mv -f "$src" "$dest"
+  chown "$(id -un):$(id -gn)" "$dest" 2>/dev/null || true
+  chmod u+rw "$dest" 2>/dev/null || true
   echo "Golden image: $dest"
   if [[ -x "$ROOT/scripts/inspect-golden-unattend.sh" ]]; then
     "$ROOT/scripts/inspect-golden-unattend.sh" "$dest"

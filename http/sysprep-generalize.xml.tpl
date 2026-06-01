@@ -27,7 +27,7 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
           <Description>Stage OOBE-only unattend for first deploy boot</Description>
-          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -LiteralPath 'C:\ProgramData\GoldenImage\sysprep-oobe.xml' -Destination 'C:\Windows\Panther\unattend.xml' -Force"</Path>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -LiteralPath 'C:\ProgramData\GoldenImage\sysprep-oobe.xml' -Destination 'C:\Windows\Panther\unattend.xml' -Force; Copy-Item -LiteralPath 'C:\ProgramData\GoldenImage\sysprep-oobe.xml' -Destination 'C:\unattend.xml' -Force"</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
       <Reseal>

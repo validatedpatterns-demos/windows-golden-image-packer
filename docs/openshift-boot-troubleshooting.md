@@ -27,7 +27,7 @@ Inspect an image:
 
 ```bash
 ./scripts/inspect-golden-qcow2.sh output/windows-server-2025-standard.qcow2
-make boot-test-2025   # uses UEFI + scsi by default
+make boot-test-2025   # libvirt qemu:///system + virtio-scsi by default
 ```
 
 **Rebuild** after changing this; old qcow2 files will not self-heal.
@@ -42,8 +42,15 @@ The default build installs Windows on an **IDE** disk, then installs VirtIO driv
 
 - `specialize` unattend (`specialize-virtio-drivers.xml.tpl`) staging drivers from the PROVISION CD
 - `01-install-virtio-drivers.ps1` copying `viostor.sys` / `vioscsi.sys` into `System32\drivers` and creating **boot-start** `Services` keys (required because the build VM has no VirtIO disk, so `pnputil` alone does not register those services)
+- `enable-virtio-blk-boot-load.ps1` binding **viostor** for **`disk.bus: virtio`**
+- `enable-virtio-scsi-boot-load.ps1` binding **vioscsi** for **`disk.bus: scsi`**
 
-**Rebuild** after pulling these changes: `make clean && make build`.
+**Rebuild** after pulling these changes: `make clean && make build`, or re-run sysprep from the prep disk:
+
+```bash
+make build-provision-sysprep-only VERSION=2022 \
+  BASE_IMAGE=output/.packer-2022/packer-win2022-standard-provision-prep.qcow2
+```
 
 ### 2. Firmware mismatch (SeaBIOS image vs UEFI VM)
 

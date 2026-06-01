@@ -32,8 +32,8 @@ if command -v virt-filesystems >/dev/null 2>&1; then
   golden_image_has_efi_partition "$IMAGE" || efi_rc=$?
   if [[ "$efi_rc" -eq 0 ]]; then
     echo "Firmware hint: UEFI (EFI system partition present)"
-    echo "Recommended boot-test: make boot-test (UEFI uses Packer OVMF sysprep QEMU layout by default)"
-    echo "Legacy libvirt test: BOOT_TEST_METHOD=libvirt make boot-test-image IMAGE=..."
+    echo "Recommended boot-test: make boot-test (libvirt qemu:///system, virtio-blk + guest-agent)"
+    echo "Packer OVMF replay:    BOOT_TEST_METHOD=packer make boot-test-image IMAGE=..."
   elif [[ "$efi_rc" -eq 2 ]]; then
     echo "Firmware hint: unknown (could not inspect partitions with libguestfs)"
     echo "Recommended boot-test: try UEFI + sata; install libguestfs-tools if missing"
@@ -44,4 +44,25 @@ if command -v virt-filesystems >/dev/null 2>&1; then
   fi
 else
   echo "Install libguestfs-tools (virt-filesystems) for partition inspection." >&2
+fi
+
+if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivexget >/dev/null 2>&1; then
+  tmp_hive="$(mktemp)"
+  if libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then
+    echo ""
+    echo "VirtIO boot-start (offline registry):"
+    for svc in viostor vioscsi; do
+      start="$(hivexget "$tmp_hive" "\\ControlSet001\\Services\\$svc" Start 2>/dev/null || echo missing)"
+      echo "  $svc Start=$start (expect 0 for virtio-scsi boot)"
+    done
+    cdd_blk="$(hivexget "$tmp_hive" '\\ControlSet001\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001' Service 2>/dev/null || echo missing)"
+    echo "  CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> $cdd_blk (expect viostor for bus=virtio)"
+    if [[ "$cdd_blk" != viostor ]]; then
+      echo "  WARN: rebuild golden with enable-virtio-blk-boot-load.ps1 or boot-test with BOOT_TEST_DISK_BUS=sata"
+    fi
+  fi
+  rm -f "$tmp_hive"
+elif [[ ! -r "$IMAGE" ]]; then
+  echo ""
+  echo "VirtIO registry check skipped (image not readable — chown golden qcow2 to your user first)." >&2
 fi

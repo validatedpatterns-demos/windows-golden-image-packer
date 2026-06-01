@@ -2,11 +2,11 @@
 
 Boot tests validate that a built **qcow2** starts without modifying the golden file you upload or publish.
 
-**UEFI images (default):** `boot-test-image.sh` uses the **same QEMU layout as the OVMF sysprep Packer pass** — q35, ich9-ahci (SATA), e1000 user networking, fresh OVMF vars, **no vTPM** (`provision_sysprep_vtpm=false`). Guest readiness is checked via forwarded **WinRM** (port 5985), matching Packer.
+**Default (UEFI and SeaBIOS):** `boot-test-image.sh` uses **libvirt `qemu:///system`** with **virtio-scsi** root disk, **virtio** NIC, and a **QEMU guest-agent channel** (`org.qemu.guest_agent.0`). Readiness is checked with `virsh domifaddr --source agent` (requires `02-install-qemu-guest-agent.ps1` in the image). **virt-viewer** opens on the system libvirt session for console visibility.
 
-**SeaBIOS images:** libvirt `virt-install` with virtio disk/NIC (`BOOT_TEST_METHOD=libvirt`).
+**Alternate:** `BOOT_TEST_METHOD=packer` replays the **OVMF sysprep Packer** layout (q35, ide-hd on `ide.0`, e1000 user netdev, WinRM port forward, no guest agent). Use that when debugging Packer sysprep boot loops, not for production virtio validation.
 
-Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\Windows\Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
+Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\unattend.xml` / `Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
 
 If you see **"The computer restarted unexpectedly"**, rebuild after fixing the sysprep answer files; clicking OK in a loop will not recover the VM.
 
@@ -15,7 +15,7 @@ If you see **language to install** during **virt-install**, ensure `mtools` is i
 If you still see the **language / region** OOBE screen on **first boot of the golden qcow2** (after sysprep):
 
 1. Run **`make clean && make build-…`** (boot-test alone does not change the qcow2).
-2. Confirm Packer log shows **`configure-oobe-locale.ps1 complete`** and **`Published OOBE unattend`**. After `make build`, promote runs **`inspect-golden-unattend.sh`** — the build fails if Panther still has the install `autounattend.xml`.
+2. Confirm Packer log shows **`configure-oobe-locale.ps1 complete`** and **`Published OOBE unattend`**. After `make build`, promote runs **`inspect-golden-unattend.sh`** — the build fails if OOBE unattend is wrong.
 3. Inspect the built image: `./scripts/inspect-golden-unattend.sh output/windows-server-2022-standard.qcow2`
 4. Render answer files on the host: `VERSION=2022 bash scripts/render-sysprep-unattend.sh`
 5. Extract logs from the golden qcow2 on the host (needs `libguestfs-tools`):
@@ -30,26 +30,47 @@ If you still see the **language / region** OOBE screen on **first boot of the go
 
 `configure-oobe-locale.ps1` installs the **en-US** language pack from `WINDOWS_ISO_PATH` (your install ISO) when possible.
 
+### Blue screen / "Your device ran into a problem and needs to restart"
+
+First boot after sysprep is fragile. Common causes:
+
+| Cause | Fix |
+|-------|-----|
+| **vTPM added at boot-test** but sysprep ran without TPM | Default is now **`BOOT_TEST_TPM=0`** (matches `provision_sysprep_vtpm=false`). Do not set `BOOT_TEST_TPM=1` until after OOBE. |
+| **virtio-blk disk** without boot-bound **viostor** | **Rebuild** golden (`enable-virtio-blk-boot-load.ps1`). Temporary: `BOOT_TEST_DISK_BUS=sata`. |
+| Used **`virtio`** (virtio-blk) under OVMF | Use **`scsi`** (virtio-scsi) — OpenShift default. `virtio-blk` usually gives no bootable device. |
+| **OOBE unattend parse error** | `./scripts/inspect-golden-unattend.sh output/windows-server-*.qcow2` — rebuild with fixed `sysprep-oobe.xml.tpl`. |
+| OOBE still running / reboot loop | Increase `BOOT_TEST_WAIT=300` `BOOT_TEST_GUEST_WAIT=900`; do not power off during OOBE. |
+
+Quick recovery without rebuild:
+
+```bash
+BOOT_TEST_TPM=0 make boot-test-image IMAGE=output/windows-server-2022-standard.qcow2
+# fallback if virtio-scsi drivers missing in golden:
+# BOOT_TEST_DISK_BUS=sata make boot-test-image IMAGE=...
+```
+
 ### Failed to boot (OVMF / VM stops)
 
 | Symptom | What to try |
 |--------|-------------|
-| OVMF **no bootable device** / **100% CPU** loop | Matches Packer sysprep pass: **ich9-ahci**, no vTPM. Run `make boot-test-image IMAGE=...` (default **packer** method). |
+| OVMF **no bootable device** with **virtio-blk** | Default boot-test uses **virtio-scsi** (`BOOT_TEST_DISK_BUS=scsi`). Do not use `virtio` (virtio-blk) under OVMF. |
+| OVMF **no bootable device** with **scsi** | Rebuild with current virtio boot-start drivers (`01-install-virtio-drivers.ps1`). Fallback: `BOOT_TEST_DISK_BUS=sata`. |
 | VM stops during first boot | Sysprep OOBE can reboot; use `BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900`. |
-| WinRM check fails on sysprepped golden | OOBE may delay WinRM; use `BOOT_TEST_CHECK_GUEST=0` or wait longer. Prep disks should pass with default guest check. |
+| Guest-agent check fails | OOBE delays agent startup; increase `BOOT_TEST_GUEST_WAIT` or use `BOOT_TEST_CHECK_GUEST=0` temporarily. |
 | **winload.efi** / blue screen after locale changes | Rebuild with current split sysprep answer files. Run `make clean && make build-…`. |
 | SeaBIOS image in UEFI VM | Rebuild with `efi_boot=true` or `BOOT_TEST_FIRMWARE=bios`. |
-| Compare with legacy libvirt path | `BOOT_TEST_METHOD=libvirt make boot-test-image IMAGE=...` |
+| Compare with Packer sysprep QEMU layout | `BOOT_TEST_METHOD=packer make boot-test-image IMAGE=...` |
 
 ## How it works
 
 1. **`qemu-img create -b`** builds a copy-on-write overlay under `~/VirtualMachines/boot-test.*` (backing qcow2 stays read-only).
-2. **UEFI (default `BOOT_TEST_METHOD=packer`):** `qemu-system-x86_64` with the **OVMF sysprep Packer** device list (`scripts/packer-ovmf-sysprep-qemu.sh`): q35, ich9-ahci + `bootindex=1`, e1000, OVMF pflash, **no vTPM**.
-3. **SeaBIOS or `BOOT_TEST_METHOD=libvirt`:** `virt-install --import` on libvirt with virtio disk/NIC (optional TPM when `BOOT_TEST_TPM=1` and `vtpm=true` in pkrvars).
-4. The test checks that the VM **stays running**, optionally **WinRM** (packer) or **guest-agent IP** (libvirt), and that the **golden file size/mtime** did not change.
-5. The QEMU process / libvirt domain and overlay are removed on exit (unless you keep them for debugging).
+2. **Default (`BOOT_TEST_METHOD=libvirt`):** `virt-install --import` on **`qemu:///system`**: q35 + OVMF, **virtio-blk** root disk (`BOOT_TEST_DISK_BUS=virtio`), **virtio** NIC, **guest-agent channel**, **no vTPM** by default.
+3. **Alternate (`BOOT_TEST_METHOD=packer`):** raw `qemu-system-x86_64` with the OVMF sysprep Packer device list (`scripts/packer-ovmf-sysprep-qemu.sh`): ide-hd on `ide.0`, e1000 user netdev, WinRM host port forward.
+4. The test checks that the VM **stays running**, optionally **guest-agent IP** (libvirt) or **WinRM** (packer), and that the **golden file size/mtime** did not change.
+5. The libvirt domain / QEMU process and overlay are removed on exit (unless you keep them for debugging).
 
-**Packer method** requires **KVM**, `qemu-system-x86_64`, and `python3` (free port selection). **Libvirt method** requires libvirt, the `default` network, and optionally `swtpm` + ACLs under `$HOME`.
+**Libvirt method** requires libvirt, the `default` network on the chosen URI, `swtpm` when TPM is enabled, and **POSIX ACLs** when disks live under `$HOME` with `qemu:///system`.
 
 If you prefer not to use ACLs, run with `BOOT_TEST_CONNECT=qemu:///session` so the VM runs as your user (session libvirt, not the system hypervisor).
 
@@ -83,16 +104,16 @@ Pass flags through `boot-test-golden.sh` to `boot-test-image.sh`:
 
 | Flag / variable | Default | Meaning |
 |-----------------|---------|---------|
-| `BOOT_TEST_METHOD` / `--method` | `packer` for UEFI, `libvirt` for BIOS | UEFI uses the OVMF sysprep Packer QEMU layout; libvirt is legacy/alternate |
+| `BOOT_TEST_METHOD` / `--method` | `libvirt` | System libvirt with virtio-scsi + guest-agent; `packer` replays OVMF sysprep QEMU |
 | `BOOT_TEST_FIRMWARE` / `--firmware` | matches `efi_boot` in `build.pkrvars.hcl` (`uefi` by default) | Must match how the qcow2 was installed (`uefi` for OpenShift images) |
-| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `sata` for libvirt UEFI | libvirt method only |
+| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `virtio` (virtio-blk) | OpenShift `disk.bus: virtio`; use `scsi` for virtio-scsi |
 | `BOOT_TEST_WAIT` / `--wait` | `180` | Seconds the VM must stay up before guest checks |
-| `BOOT_TEST_GUEST_WAIT` / `--guest-wait` | `600` | Max seconds to wait for WinRM (packer) or guest-agent IP (libvirt) |
+| `BOOT_TEST_GUEST_WAIT` / `--guest-wait` | `600` | Max seconds to wait for guest-agent IP (libvirt) or WinRM (packer) |
 | `BOOT_TEST_CHECK_GUEST` | `1` | Set `0` or `--no-guest-check` to only verify the VM process stays running |
 | `BOOT_TEST_GRAPHICS` / `--graphics` | `vnc` | `none` for headless automation |
-| `BOOT_TEST_SHOW_CONSOLE` / `--no-console` | `1` | Launch **vncviewer** (packer) or **virt-viewer** (libvirt) |
-| `BOOT_TEST_CONNECT` | `qemu:///system` | libvirt URI (libvirt method only) |
-| `BOOT_TEST_TPM` | `1` | libvirt UEFI only; set `0` to skip TPM |
+| `BOOT_TEST_SHOW_CONSOLE` / `--no-console` | `1` | Launch **virt-viewer** (libvirt) or **vncviewer** (packer) |
+| `BOOT_TEST_CONNECT` | `qemu:///system` | libvirt URI |
+| `BOOT_TEST_TPM` | `0` (from `provision_sysprep_vtpm`) | Set `1` only to test vTPM after OOBE works |
 | `BOOT_TEST_KEEP_VM` / `--keep-vm` | `0` | Leave the domain defined after the test |
 | `BOOT_TEST_WORK_DIR` | `~/VirtualMachines` | Parent directory for overlay qcow2 (`boot-test.*` subdirs) |
 | `BOOT_TEST_KEEP_DISK` / `--keep-disk` | `0` | Keep the overlay under `BOOT_TEST_WORK_DIR/boot-test.*` |
@@ -102,6 +123,12 @@ Example — faster smoke test (no guest-agent wait):
 
 ```bash
 BOOT_TEST_CHECK_GUEST=0 BOOT_TEST_WAIT=60 make boot-test-2025
+```
+
+Example — replay Packer sysprep QEMU layout:
+
+```bash
+BOOT_TEST_METHOD=packer make boot-test-image IMAGE=output/windows-server-2022-standard.qcow2
 ```
 
 Example — UEFI disk from `scripts/build-uefi-virt-install.sh`:
@@ -119,10 +146,26 @@ make boot-test-2025
 
 Exit code `0` prints `PASS:`; non-zero indicates boot failure, guest-agent timeout, or accidental modification of the backing qcow2.
 
-## Permission denied (uid 107)
+## Permission denied on backing qcow2
 
-With `qemu:///system`, QEMU runs as the **qemu** user (often uid 107). It must traverse every directory from `/` to the overlay and backing qcow2. `boot-test-image.sh` sets **POSIX ACLs** (`setfacl`) on those paths automatically. If that fails, install `acl` or use session libvirt:
+```
+qemu-img: ... Could not open '.../windows-server-*.qcow2': Permission denied
+Could not open backing image.
+```
+
+A prior **`qemu:///system`** boot-test (or libvirt **dynamic_ownership**) can leave the golden file owned by **`qemu:qemu`** mode **`640`**. Your user runs **`qemu-img create -b`** and must **read** the backing file first.
+
+**One-time fix** (reclaim the golden for your user):
 
 ```bash
-BOOT_TEST_CONNECT=qemu:///session make boot-test-2025
+sudo chown "$(whoami):$(whoami)" output/windows-server-2022-standard.qcow2
+chmod u+rw output/windows-server-2022-standard.qcow2
+```
+
+Then re-run boot-test. The script reclaims ownership automatically when **passwordless sudo** is available, and tries again in **cleanup** after the test.
+
+Requires **`acl`** for runtime (`dnf install acl`). Without passwordless sudo, use session libvirt:
+
+```bash
+BOOT_TEST_CONNECT=qemu:///session make boot-test-image IMAGE=...
 ```

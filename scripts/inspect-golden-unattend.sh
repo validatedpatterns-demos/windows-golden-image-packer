@@ -2,7 +2,7 @@
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Read C:\Windows\Panther\unattend.xml from a golden qcow2 (offline) to confirm sysprep OOBE locale settings.
+# Read OOBE unattend from a golden qcow2 (offline) and confirm sysprep first-boot settings.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,47 +20,81 @@ if ! command -v guestfish >/dev/null 2>&1; then
   exit 1
 fi
 
+read_guest_file() {
+  local guest_path="$1"
+  libguestfs_direct guestfish --ro -a "$IMAGE" -i cat "$guest_path" 2>/dev/null || true
+}
+
+validate_oobe_unattend() {
+  local label="$1"
+  local unattend="$2"
+
+  if [[ -z "$unattend" ]]; then
+    echo "FAIL: $label is empty or missing" >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q 'pass="windowsPE"'; then
+    echo "FAIL: $label is the install answer file (contains windowsPE pass)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q 'pass="generalize"'; then
+    echo "FAIL: $label is sysprep-generalize.xml (missing oobeSystem for first deploy boot)." >&2
+    return 1
+  fi
+
+  if ! printf '%s\n' "$unattend" | grep -q 'pass="oobeSystem"'; then
+    echo "FAIL: $label has no oobeSystem pass." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q 'pass="oobeSystem" wasPassProcessed="true"'; then
+    echo "FAIL: $label oobeSystem was already processed (install autounattend?)." >&2
+    return 1
+  fi
+
+  if ! printf '%s\n' "$unattend" | grep -q 'Microsoft-Windows-International-Core'; then
+    echo "FAIL: $label has no Microsoft-Windows-International-Core (locale OOBE will prompt)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q 'WIN-PACKER'; then
+    echo "FAIL: $label is still install autounattend.xml (ComputerName WIN-PACKER)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q '<Enabled>true</Enabled>'; then
+    echo "FAIL: $label has AutoLogon enabled (install file, not sysprep-oobe.xml)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q '<NetworkLocation>'; then
+    echo "FAIL: $label contains deprecated NetworkLocation (OOBE parse error on Server)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q '<WillShowUI>'; then
+    echo "FAIL: $label contains WillShowUI (valid only in windowsPE UserData, not oobeSystem)." >&2
+    return 1
+  fi
+
+  echo "OK: $label looks like sysprep OOBE configuration" >&2
+}
+
 IMAGE="$(readlink -f "$IMAGE")"
 echo "Inspecting $IMAGE" >&2
 
-unattend="$(libguestfs_direct guestfish --ro -a "$IMAGE" -i <<'EOF'
-cat /Windows/Panther/unattend.xml
-EOF
-)" || {
-  echo "ERROR: Could not read /Windows/Panther/unattend.xml from image" >&2
-  exit 1
-}
+c_unattend="$(read_guest_file /unattend.xml)"
+panther_unattend="$(read_guest_file /Windows/Panther/unattend.xml)"
 
-if printf '%s\n' "$unattend" | grep -q 'pass="windowsPE"'; then
-  echo "FAIL: Panther unattend is the install answer file (contains windowsPE pass)." >&2
-  echo "      Provision/sysprep did not replace it with sysprep-oobe.xml." >&2
+rc=0
+validate_oobe_unattend "C:\\unattend.xml" "$c_unattend" || rc=1
+validate_oobe_unattend "Panther\\unattend.xml" "$panther_unattend" || rc=1
+
+if [[ $rc -ne 0 ]]; then
+  echo "      Rebuild with current sysprep-oobe.xml.tpl and sysprep.ps1." >&2
   exit 1
 fi
 
-if printf '%s\n' "$unattend" | grep -q 'pass="generalize"'; then
-  echo "FAIL: Panther unattend is sysprep-generalize.xml (missing oobeSystem for first deploy boot)." >&2
-  echo "      Rebuild with current sysprep.ps1 (restores sysprep-oobe.xml after sysprep.exe)." >&2
-  exit 1
-fi
-
-if printf '%s\n' "$unattend" | grep -q 'pass="oobeSystem" wasPassProcessed="true"'; then
-  echo "FAIL: Panther unattend oobeSystem was already processed (install autounattend)." >&2
-  exit 1
-fi
-
-if ! printf '%s\n' "$unattend" | grep -q 'Microsoft-Windows-International-Core'; then
-  echo "FAIL: Panther unattend has no Microsoft-Windows-International-Core (locale OOBE will prompt)." >&2
-  exit 1
-fi
-
-if printf '%s\n' "$unattend" | grep -q 'WIN-PACKER'; then
-  echo "FAIL: Panther unattend is still install autounattend.xml (ComputerName WIN-PACKER)." >&2
-  exit 1
-fi
-
-if printf '%s\n' "$unattend" | grep -q '<Enabled>true</Enabled>'; then
-  echo "FAIL: Panther unattend has AutoLogon enabled (install file, not sysprep-oobe.xml)." >&2
-  exit 1
-fi
-
-echo "OK: Panther unattend.xml looks like sysprep OOBE locale configuration" >&2
+exit 0

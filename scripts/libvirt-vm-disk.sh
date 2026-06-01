@@ -178,9 +178,16 @@ golden_image_has_efi_partition() {
   return 1
 }
 
-# Match install bus (SATA) so OVMF can read the ESP without a driver switch.
+# OpenShift / KubeVirt default: virtio-blk (libvirt disk bus=virtio). Also stage vioscsi for bus=scsi.
 default_uefi_disk_bus() {
-  echo sata
+  echo virtio
+}
+
+# Virtio serial channel for virsh domifaddr --source agent (guest must run qemu-ga).
+libvirt_guest_agent_channel_args() {
+  LIBVIRT_GUEST_AGENT_CHANNEL_ARGS=(
+    --channel "unix,target_type=virtio,name=org.qemu.guest_agent.0"
+  )
 }
 
 # Returns 0 if vtpm is enabled in var file (default true).
@@ -285,6 +292,73 @@ libvirt_grant_qemu_traverse_parents() {
     fi
     dir="$(dirname "$dir")"
   done
+}
+
+# Ensure the build user can read a golden backing qcow2 (libvirt dynamic_ownership may leave qemu:640).
+libvirt_reclaim_backing_for_build_user() {
+  local backing="$1"
+  local build_user owner
+  build_user="${USER:-$(id -un)}"
+  backing="$(readlink -f "$backing")"
+
+  if [[ -r "$backing" ]]; then
+    return 0
+  fi
+
+  owner="$(stat -c '%U' "$backing" 2>/dev/null || echo unknown)"
+  echo "Golden backing not readable (${owner} $(stat -c '%G %a' "$backing" 2>/dev/null || echo unknown))." >&2
+
+  if [[ "$owner" == "$build_user" ]]; then
+    chmod u+rw "$backing" 2>/dev/null || true
+    [[ -r "$backing" ]] && return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n chown "$build_user:$build_user" "$backing" 2>/dev/null; then
+    chmod u+rw "$backing" 2>/dev/null || true
+    echo "Reclaimed $backing for $build_user (passwordless sudo)." >&2
+    [[ -r "$backing" ]] && return 0
+  fi
+
+  echo "ERROR: cannot read backing file: $backing" >&2
+  echo "  A prior qemu:///system boot-test likely left it owned by $(libvirt_qemu_user)." >&2
+  echo "  Run: sudo chown $build_user:$build_user '$backing' && chmod u+rw '$backing'" >&2
+  echo "  Or: BOOT_TEST_CONNECT=qemu:///session make boot-test-image ..." >&2
+  return 1
+}
+
+libvirt_ensure_build_user_read_file() {
+  libvirt_reclaim_backing_for_build_user "$1"
+}
+
+# boot-test overlay + backing under \$HOME with qemu:///system: build user runs qemu-img create;
+# qemu user opens both files at runtime.
+libvirt_prepare_system_boot_test_disks() {
+  local overlay="$1"
+  local backing="$2"
+  local build_user qemu_user overlay_dir
+  build_user="${USER:-$(id -un)}"
+  qemu_user="$(libvirt_qemu_user)"
+  overlay="$(readlink -f "$overlay")"
+  backing="$(readlink -f "$backing")"
+  overlay_dir="$(dirname "$overlay")"
+
+  if ! command -v setfacl >/dev/null 2>&1; then
+    echo "ERROR: setfacl is required for qemu:///system boot-test under \$HOME (dnf install acl)." >&2
+    echo "  Or set BOOT_TEST_CONNECT=qemu:///session to run VMs as your user." >&2
+    return 1
+  fi
+
+  libvirt_reclaim_backing_for_build_user "$backing" || return 1
+
+  libvirt_grant_qemu_traverse_parents "$qemu_user" "$overlay" || return 1
+  libvirt_grant_qemu_traverse_parents "$qemu_user" "$backing" || return 1
+
+  setfacl -m "u:${qemu_user}:rx" "$overlay_dir" || return 1
+  setfacl -m "u:${build_user}:rwx" "$overlay_dir" || return 1
+  setfacl -m "u:${qemu_user}:rw" "$overlay" || return 1
+  setfacl -m "u:${build_user}:rw" "$overlay" || return 1
+  setfacl -m "u:${qemu_user}:r" "$backing" || return 1
+  echo "Prepared ACLs for $build_user and $qemu_user on boot-test overlay and backing." >&2
 }
 
 # Before qemu:///system virt-install: keep build-user rw after libvirt dynamic_ownership (nobody:nobody).

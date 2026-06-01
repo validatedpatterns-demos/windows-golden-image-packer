@@ -175,6 +175,21 @@ function Ensure-BootDriverStaged {
     }
 }
 
+function Set-VirtioCriticalDeviceDatabase {
+    param(
+        [string]$ServiceName,
+        [string[]]$RelativePaths
+    )
+
+    $classGuid = '{4d36e97b-e325-11ce-bfc1-08002be10318}'
+    foreach ($rel in $RelativePaths) {
+        $key = "HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\$rel"
+        New-Item -Path $key -Force | Out-Null
+        Set-ItemProperty -Path $key -Name 'Service' -Value $ServiceName -Type String -Force
+        Set-ItemProperty -Path $key -Name 'ClassGUID' -Value $classGuid -Type String -Force
+        Write-Host "CriticalDeviceDatabase: $rel -> $ServiceName"
+    }
+}
 function Confirm-BootDrivers {
     param([string[]]$ServiceNames)
 
@@ -212,6 +227,24 @@ Ensure-BootDriverStaged -ServiceName 'viostor' -SysFileName 'viostor.sys' -InfPa
 Ensure-BootDriverStaged -ServiceName 'vioscsi' -SysFileName 'vioscsi.sys' -InfPath $vioscsiInf
 Install-DriverPackage -InfPath $netkvmInf | Out-Null
 
+Set-VirtioCriticalDeviceDatabase -ServiceName 'viostor' -RelativePaths @(
+    'pci#ven_1af4&dev_1001',
+    'pci#ven_1af4&dev_1001&subsys_00021af4&rev_00',
+    'pci#ven_1af4&dev_1042&subsys_11001af4&rev_01'
+)
+
+$enableBlkBoot = Join-Path $PSScriptRoot 'enable-virtio-blk-boot-load.ps1'
+if (-not (Test-Path -LiteralPath $enableBlkBoot)) {
+    throw "Missing $enableBlkBoot"
+}
+& $enableBlkBoot -InfPath $viostorInf
+
+$enableScsiBoot = Join-Path $PSScriptRoot 'enable-virtio-scsi-boot-load.ps1'
+if (-not (Test-Path -LiteralPath $enableScsiBoot)) {
+    throw "Missing $enableScsiBoot"
+}
+& $enableScsiBoot -InfPath $vioscsiInf
+
 Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
 
-Write-Host 'VirtIO driver installation complete (viostor/vioscsi boot-start).'
+Write-Host 'VirtIO driver installation complete (viostor/vioscsi boot-start + virtio blk/scsi boot binding).'

@@ -189,9 +189,15 @@ build {
     destination = "C:/Windows/Temp/oobe-info-defaults.xml"
   }
 
+  provisioner "file" {
+    destination = "C:/Windows/Temp/"
+    source      = "${path.root}/../drivers"
+  }
+
   provisioner "powershell" {
     environment_vars = local.provision_env_vars
     scripts          = [
+      "${path.root}/../scripts/01-install-virtio-drivers.ps1",
       "${path.root}/../scripts/07-repair-uefi-boot.ps1",
       "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",

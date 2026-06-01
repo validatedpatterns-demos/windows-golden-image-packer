@@ -1,6 +1,6 @@
 # Using the golden image in OpenShift Virtualization
 
-The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers staged for **OpenShift `disk.bus: scsi`** (virtio-scsi controller). UEFI installs use **SATA** during Setup so OVMF/WinPE are reliable; **vioscsi** is boot-start for runtime SCSI disks. Do not use **`bus: virtio`** (virtio-blk) unless your cluster OVMF is known to boot it — many hosts show **no bootable device**.
+The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers for **OpenShift `disk.bus: virtio`** (virtio-blk / **viostor**). **vioscsi** is also boot-bound for clusters that use **`disk.bus: scsi`**. UEFI installs use **SATA** during Setup so OVMF/WinPE are reliable.
 
 **Firmware:** Default **`efi_boot = true`** builds **UEFI + GPT** images ([uefi-install.md](uefi-install.md)). OpenShift `VirtualMachine` specs must use **UEFI** firmware (`firmware.bootloader.efi`), not SeaBIOS. Boot-testing with `make boot-test` uses UEFI when `efi_boot` is true. SeaBIOS-only disks (`efi_boot = false`) will not boot in a UEFI VM.
 
