@@ -111,6 +111,17 @@ function Repair-UefiBootIfNeeded {
     }
 }
 
+function Invoke-GuestShutdown {
+    Write-Host 'Forcing guest shutdown for Packer (sysprep runs without /shutdown so OOBE unattend can be restored first).'
+    & "$env:SystemRoot\System32\shutdown.exe" /s /t 0 /f
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "shutdown.exe exit $LASTEXITCODE; trying Stop-Computer -Force"
+        Stop-Computer -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 5
+    Write-Host 'Shutdown requested; Packer will wait for the VM to power off.'
+}
+
 try {
     $clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
     if (Test-Path $clearScript) {
@@ -183,7 +194,9 @@ try {
     Remove-SysprepBlockingAppx
 
     $unattend = $generalizeUnattend
-    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/shutdown', "/unattend:$unattend")
+    # Do not pass /shutdown: sysprep may power off before this script restores sysprep-oobe.xml,
+    # and QEMU often ignores sysprep /shutdown anyway (Packer then times out waiting for power-off).
+    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', "/unattend:$unattend")
     Write-Host ('Running sysprep ' + ($sysprepArgs -join ' '))
 
     Remove-Item -Path $sysprepStdout, $sysprepStderr -Force -ErrorAction SilentlyContinue
@@ -212,9 +225,7 @@ try {
     }
     Write-Host 'Restored OOBE-only unattend in Panther after sysprep generalize'
 
-    Write-Host 'sysprep.exe completed successfully; forcing guest shutdown (sysprep /shutdown can leave the VM running under QEMU).'
-    Start-Process -FilePath "$env:SystemRoot\System32\shutdown.exe" -ArgumentList @('/s', '/t', '0', '/f') -NoNewWindow
-    Write-Host 'shutdown /s /t 0 /f issued; Packer will wait for power-off.'
+    Invoke-GuestShutdown
 }
 catch {
     if (-not (Test-Path $diagLog)) {

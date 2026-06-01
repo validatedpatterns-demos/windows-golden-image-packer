@@ -86,6 +86,7 @@ Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-insta
 
 **Sysprep on SeaBIOS + GPT disk fails** (`SYSPRP BCD: Failed to get system partition`, `0x80073bc3`). After `mbr2gpt`, sysprep must run under OVMF. The MBR provision pass shuts down without sysprep; a second OVMF pass runs sysprep only.
 
+| `Timeout while waiting for machine to shut down` after sysprep | Sysprep used to pass `/shutdown`, which often leaves QEMU running and skips OOBE unattend restore. Current `sysprep.ps1` runs sysprep without `/shutdown`, restores `sysprep-oobe.xml`, then `shutdown /s /t 0 /f`. Retry: `make build-provision-sysprep-only ...` |
 | `Timeout while waiting for machine to shut down` after sysprep on MBR pass | Sysprep failed on SeaBIOS (BCD generalize needs UEFI). Update templates and retry: `EXECUTE=1 make recover-provision VERSION=2022` (GPT work disk → sysprep-only), or copy work disk to `recovery/` and `make build-provision-sysprep-only BASE_IMAGE=...`. |
 
 | `Guest has not initialized the display` / blank VNC, **100% CPU** | **OVMF pflash opened as `format=raw`** on qcow2 firmware files loops; templates now use **`format=qcow2`** and **`ide-hd` on `ide.0`**. Confirm cmdline has **`format=qcow2`** on both pflash drives and **no `tpm-tis`**. Kill VM and retry. |

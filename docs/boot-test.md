@@ -8,7 +8,7 @@ Boot tests validate that a built **qcow2** starts without modifying the golden f
 
 Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\unattend.xml` / `Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
 
-If you see **"The computer restarted unexpectedly"**, rebuild after fixing the sysprep answer files; clicking OK in a loop will not recover the VM.
+If you see **"The computer restarted unexpectedly"** or **"Sysprep hasn't finished"**, the golden disk was likely captured or boot-tested before sysprep completed and shut down cleanly. Rebuild with current `sysprep.ps1` (no sysprep `/shutdown`; explicit `shutdown /s /t 0 /f` after OOBE unattend restore).
 
 If you see **language to install** during **virt-install**, ensure `mtools` is installed and the log shows `Unattend floppy:`. Run `VERSION=2022 bash scripts/render-autounattend.sh | xmllint --noout -`. If you see **BdsDxe: No bootable option**, delete any `output/.packer-*/windows-uefi-install.iso` (repacked ISO breaks UEFI) and rebuild with the unchanged Microsoft ISO.
 
