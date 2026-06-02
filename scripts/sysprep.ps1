@@ -180,14 +180,23 @@ function Wait-SysprepWithProgress {
             if ($size -gt $lastSetupActSize) {
                 $lastSetupActSize = $size
                 Write-Host "=== tail $setupAct ==="
-                Get-LogTail -Path $setupAct -Lines 8 | ForEach-Object { Write-Host $_ }
+                $tail = Get-LogTail -Path $setupAct -Lines 8
+                $tail | ForEach-Object { Write-Host $_ }
+                if (($tail -join "`n") -match 'Sysprep_succeeded\.tag|InitiateSystemShutdownEx') {
+                    Cancel-PendingGuestShutdown
+                }
             }
+        }
+
+        if (Test-SysprepGeneralizeSucceeded) {
+            Cancel-PendingGuestShutdown
         }
 
         Start-Sleep -Seconds 60
     }
 
-    return $proc.ExitCode
+    Cancel-PendingGuestShutdown
+    return Resolve-SysprepProcessExit -ExitCode $proc.ExitCode
 }
 
 function Invoke-GuestShutdown {
@@ -225,6 +234,44 @@ function Test-SysprepNotAlreadyGeneralized {
 
 function Test-SysprepGeneralizeSucceeded {
     return Test-Path -LiteralPath 'C:\Windows\System32\Sysprep\Sysprep_succeeded.tag'
+}
+
+function Cancel-PendingGuestShutdown {
+    & "$env:SystemRoot\System32\shutdown.exe" /a 2>&1 | Out-Null
+}
+
+function Wait-ForSysprepSucceededTag {
+    param([int]$TimeoutSeconds = 90)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Cancel-PendingGuestShutdown
+        if (Test-SysprepGeneralizeSucceeded) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+function Resolve-SysprepProcessExit {
+    param([object]$ExitCode)
+
+    Cancel-PendingGuestShutdown
+    Start-Sleep -Milliseconds 500
+    Cancel-PendingGuestShutdown
+
+    if ($null -eq $ExitCode) {
+        return 1
+    }
+    if ([int]$ExitCode -eq 0) {
+        return 0
+    }
+    if ([int]$ExitCode -eq 16001 -and (Wait-ForSysprepSucceededTag)) {
+        Write-Warning 'sysprep.exe returned 16001 but Sysprep_succeeded.tag is present (OVMF BCD EFI export noise); treating generalize as successful.'
+        return 0
+    }
+    return [int]$ExitCode
 }
 
 function Test-SysprepOvmfBcdEfiExportExit {
@@ -339,8 +386,8 @@ try {
     }
 
     $unattend = $generalizeUnattend
-    # Do not pass /shutdown: sysprep may power off before this script restores sysprep-oobe.xml,
-    # and QEMU often ignores sysprep /shutdown anyway (Packer then times out waiting for power-off).
+    # sysprep /generalize still calls InitiateSystemShutdownEx on success even without /shutdown;
+    # sysprep.ps1 cancels that so virtio restore + OOBE unattend run before Packer powers off.
     $timeoutMin = 45
     if ($env:SYSPREP_TIMEOUT_MINUTES -match '^\d+$') {
         $timeoutMin = [int]$env:SYSPREP_TIMEOUT_MINUTES
