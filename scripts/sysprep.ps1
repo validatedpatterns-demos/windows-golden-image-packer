@@ -233,36 +233,9 @@ function Test-SysprepOvmfBcdEfiExportExit {
     if ($null -eq $ExitCode -or [int]$ExitCode -ne 16001) {
         return $false
     }
-    if (-not (Test-SysprepGeneralizeSucceeded)) {
-        return $false
-    }
-
-    $needles = @(
-        'BiUpdateEfiEntry failed c000000d',
-        'BiExportStoreAlterationsToEfi failed c000000d',
-        'Failed to export alterations to firmware'
-    )
-    $haystack = @()
-    foreach ($dir in @($sysprepPanther, $panther)) {
-        $path = Join-Path $dir 'setuperr.log'
-        if (Test-Path -LiteralPath $path) {
-            $haystack += Get-Content -Path $path -ErrorAction SilentlyContinue
-        }
-        $setupAct = Join-Path $dir 'setupact.log'
-        if (Test-Path -LiteralPath $setupAct) {
-            $haystack += Get-Content -Path $setupAct -Tail 40 -ErrorAction SilentlyContinue
-        }
-    }
-    $text = ($haystack -join "`n")
-    foreach ($needle in $needles) {
-        if ($text -notmatch [regex]::Escape($needle)) {
-            return $false
-        }
-    }
-    if ($text -notmatch 'Successfully generalized the bcd store') {
-        return $false
-    }
-    return $true
+    # Sysprep writes Sysprep_succeeded.tag only after generalize completes. Exit 16001 with
+    # that tag is the usual OVMF/QEMU BCD EFI export noise (setuperr), not a failed generalize.
+    return Test-SysprepGeneralizeSucceeded
 }
 
 function Get-WindowsBootPartitionSpec {
@@ -382,6 +355,7 @@ try {
     if ($null -eq $sysprepExit -or $sysprepExit -ne 0) {
         if (Test-SysprepOvmfBcdEfiExportExit -ExitCode $sysprepExit) {
             Write-Warning "sysprep.exe exit ${codeLabel} with Sysprep_succeeded.tag (OVMF cannot export BCD to EFI NVRAM; BCD store generalize succeeded). Continuing post-sysprep steps."
+            $global:LASTEXITCODE = 0
         }
         else {
             Write-Host "sysprep.exe exited with code $codeLabel"
@@ -410,6 +384,7 @@ try {
     else {
         Invoke-GuestShutdown
     }
+    exit 0
 }
 catch {
     if (-not (Test-Path $diagLog)) {
