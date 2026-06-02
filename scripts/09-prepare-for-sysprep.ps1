@@ -38,6 +38,17 @@ function Stop-UpdateServices {
 Stop-UpdateServices
 Remove-SysprepBlockingAppx
 
+foreach ($src in @('C:\Windows\Temp\drivers', 'C:\Windows\Temp\virtio-drivers')) {
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    $dest = Join-Path $goldenData 'virtio-drivers'
+    if (Test-Path -LiteralPath $dest) {
+        Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Copy-Item -LiteralPath $src -Destination $dest -Recurse -Force
+    Write-Host "Staged VirtIO drivers for sysprep pass at $dest"
+    break
+}
+
 if (Test-PendingReboot) {
     Write-Host 'Pending reboot detected (expected after drivers/mbr2gpt/DISM); Packer windows-restart will reboot next'
 }

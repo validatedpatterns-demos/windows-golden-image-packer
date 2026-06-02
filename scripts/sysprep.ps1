@@ -165,16 +165,23 @@ function Wait-SysprepWithProgress {
             -RedirectStandardOutput $sysprepStdout -RedirectStandardError $sysprepStderr
 
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $started = Get-Date
         $lastSetupActSize = 0L
         $lastLogAt = [datetime]::MinValue
+        $procExitAt = $null
 
-        while (-not $proc.HasExited) {
+        while ((Get-Date) -lt $deadline) {
             Cancel-PendingGuestShutdown
-            if ((Get-Date) -gt $deadline) {
-                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
-                Save-SysprepDiagnostics "sysprep timeout after ${TimeoutMinutes}m"
-                Write-SysprepDiagnosticLogs
-                throw "sysprep.exe did not finish within ${TimeoutMinutes} minutes. Check VNC (./scripts/show-packer-console.sh) and $diagLog"
+
+            if (Test-SysprepGeneralizeSucceeded) {
+                Start-Sleep -Seconds 2
+                break
+            }
+
+            if ($proc.HasExited -and -not $procExitAt) {
+                $procExitAt = Get-Date
+                $elapsed = (($procExitAt - $started).TotalSeconds)
+                Write-Host "sysprep.exe parent process exited after ${elapsed}s (exit $($proc.ExitCode)); waiting for Sysprep_succeeded.tag until timeout..."
             }
 
             foreach ($dir in @($sysprepPanther, $panther)) {
@@ -194,11 +201,29 @@ function Wait-SysprepWithProgress {
             Start-Sleep -Seconds 2
         }
 
+        if (-not (Test-SysprepGeneralizeSucceeded)) {
+            if ((Get-Date) -gt $deadline) {
+                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+                Save-SysprepDiagnostics "sysprep timeout after ${TimeoutMinutes}m"
+                Write-SysprepDiagnosticLogs
+                throw "sysprep.exe did not finish within ${TimeoutMinutes} minutes. Check VNC (./scripts/show-packer-console.sh) and $diagLog"
+            }
+        }
+
         Cancel-PendingGuestShutdown
-        return Resolve-SysprepProcessExit -ExitCode $proc.ExitCode
+        $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { $null }
+        if (Test-SysprepGeneralizeSucceeded) {
+            return 0
+        }
+        return Resolve-SysprepProcessExit -ExitCode $exitCode
     }
     finally {
-        Stop-SysprepShutdownGuard -Job $shutdownGuard
+        try {
+            Stop-SysprepShutdownGuard -GuardProcess $shutdownGuard
+        }
+        catch {
+            Write-Warning "shutdown guard cleanup: $($_.Exception.Message)"
+        }
     }
 }
 
@@ -236,24 +261,57 @@ function Test-SysprepNotAlreadyGeneralized {
 }
 
 function Cancel-PendingGuestShutdown {
-    & "$env:SystemRoot\System32\shutdown.exe" /a 2>&1 | Out-Null
+    # shutdown /a exits 1116 when nothing is pending; under $ErrorActionPreference Stop that
+    # stderr must not terminate sysprep.ps1 while polling during /generalize.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & "$env:SystemRoot\System32\shutdown.exe" /a *>$null
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
 }
 
 function Start-SysprepShutdownGuard {
-    $sb = {
-        while ($true) {
-            & "$env:SystemRoot\System32\shutdown.exe" /a 2>&1 | Out-Null
-            Start-Sleep -Milliseconds 400
-        }
-    }
-    return Start-Job -Name 'SysprepShutdownGuard' -ScriptBlock $sb
+    # Use a hidden child process, not Start-Job. Packer WinRM can deserialize job objects so
+    # Stop-Job/Remove-Job -Force fail with "parameter name 'Force'" and abort before post-sysprep steps.
+    $guardScript = Join-Path $env:TEMP 'sysprep-shutdown-guard.ps1'
+    @'
+$ErrorActionPreference = 'SilentlyContinue'
+while ($true) {
+    & "$env:SystemRoot\System32\shutdown.exe" /a *>$null
+    Start-Sleep -Milliseconds 400
+}
+'@ | Set-Content -LiteralPath $guardScript -Encoding UTF8
+    return Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $guardScript) `
+        -PassThru -WindowStyle Hidden
 }
 
 function Stop-SysprepShutdownGuard {
-    param($Job)
-    if (-not $Job) { return }
-    Stop-Job -Job $Job -Force -ErrorAction SilentlyContinue
-    Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
+    param($GuardProcess)
+    if (-not $GuardProcess) { return }
+    try {
+        Stop-Process -Id $GuardProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Warning "Could not stop sysprep shutdown guard: $($_.Exception.Message)"
+    }
+}
+
+function Stage-VirtioDriversForSysprep {
+    $dest = Join-Path $goldenData 'virtio-drivers'
+    foreach ($src in @('C:\Windows\Temp\drivers', 'C:\Windows\Temp\virtio-drivers')) {
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        if (Test-Path -LiteralPath $dest) {
+            Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Copy-Item -LiteralPath $src -Destination $dest -Recurse -Force
+        Write-Host "Staged VirtIO drivers for post-sysprep restore at $dest"
+        return
+    }
+    Write-Warning 'VirtIO driver tree not found in Temp; restore-virtio-boot-after-sysprep.ps1 needs staged drivers under ProgramData\GoldenImage.'
 }
 
 function Test-SysprepGeneralizeSucceeded {
@@ -298,20 +356,20 @@ function Resolve-SysprepProcessExit {
     if ([int]$ExitCode -eq 0) {
         return 0
     }
-    if ([int]$ExitCode -eq 16001 -and (Wait-ForSysprepSucceededTag)) {
-        Write-Warning 'sysprep.exe returned 16001 but Sysprep_succeeded.tag is present (OVMF BCD EFI export noise); treating generalize as successful.'
+    if ([int]$ExitCode -ne 0 -and (Wait-ForSysprepSucceededTag)) {
+        Write-Warning "sysprep.exe returned $ExitCode but Sysprep_succeeded.tag is present (OVMF BCD EFI export noise); treating generalize as successful."
         return 0
     }
     return [int]$ExitCode
 }
 
-function Test-SysprepOvmfBcdEfiExportExit {
+function Test-SysprepGeneralizeSucceededDespiteExit {
     param([object]$ExitCode)
 
-    if ($null -eq $ExitCode -or [int]$ExitCode -ne 16001) {
+    if ($null -eq $ExitCode -or [int]$ExitCode -eq 0) {
         return $false
     }
-    # Sysprep writes Sysprep_succeeded.tag only after generalize completes. Exit 16001 with
+    # Sysprep writes Sysprep_succeeded.tag only after generalize completes. Non-zero exit with
     # that tag is the usual OVMF/QEMU BCD EFI export noise (setuperr), not a failed generalize.
     return Test-SysprepGeneralizeSucceeded
 }
@@ -416,6 +474,8 @@ try {
         Remove-SysprepBlockingAppx
     }
 
+    Stage-VirtioDriversForSysprep
+
     $unattend = $generalizeUnattend
     # /quit: do not reboot or shut down after generalize — post-sysprep virtio restore and OOBE
     # unattend must run while WinRM is still up. Without /quit, sysprep calls InitiateSystemShutdownEx
@@ -432,7 +492,7 @@ try {
     $codeLabel = if ($null -eq $sysprepExit) { 'unknown' } else { "$sysprepExit" }
 
     if ($null -eq $sysprepExit -or $sysprepExit -ne 0) {
-        if (Test-SysprepOvmfBcdEfiExportExit -ExitCode $sysprepExit) {
+        if (Test-SysprepGeneralizeSucceededDespiteExit -ExitCode $sysprepExit) {
             Write-Warning "sysprep.exe exit ${codeLabel} with Sysprep_succeeded.tag (OVMF cannot export BCD to EFI NVRAM; BCD store generalize succeeded). Continuing post-sysprep steps."
             $global:LASTEXITCODE = 0
         }
@@ -458,18 +518,14 @@ try {
     & $restoreVirtio
 
     $global:LASTEXITCODE = 0
-    if ($ProvisionerRun) {
-        Write-Host 'Sysprep finished under Packer provisioner; Packer shutdown_command will power off the guest.'
-    }
-    else {
-        Invoke-GuestShutdown
-    }
+    # Generalize can break WinRM before Packer's shutdown_command runs; power off locally and let
+    # Packer wait for the QEMU process to exit instead of another WinRM round-trip.
+    Invoke-GuestShutdown
     exit 0
 }
 catch {
-    if (-not (Test-Path $diagLog)) {
-        Save-SysprepDiagnostics $_.Exception.Message
-        Write-SysprepDiagnosticLogs
-    }
+    Save-SysprepDiagnostics $_.Exception.Message
+    Write-SysprepDiagnosticLogs
+    Write-Host "sysprep.ps1 failed: $($_.Exception.Message)"
     exit 1
 }

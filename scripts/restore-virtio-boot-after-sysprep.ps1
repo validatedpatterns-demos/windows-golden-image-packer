@@ -25,6 +25,4 @@ if (-not (Test-Path -LiteralPath $verify)) {
 }
 & $verify
 
-Sync-VirtioBootRegistryToAllControlSets
-
 Write-Host 'restore-virtio-boot-after-sysprep.ps1 complete'

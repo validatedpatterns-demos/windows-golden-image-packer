@@ -71,6 +71,7 @@ function Get-DriverSearchPaths {
 
 function Get-ProvisionSearchRoots {
     $roots = @(
+        'C:\ProgramData\GoldenImage\virtio-drivers',
         'C:\Windows\Temp\drivers',
         'C:\Windows\Temp\virtio-drivers'
     )

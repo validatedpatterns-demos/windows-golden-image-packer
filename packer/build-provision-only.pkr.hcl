@@ -96,7 +96,9 @@ source "qemu" "from_install_gpt" {
   winrm_use_ssl  = false
   winrm_port     = 5985
 
-  shutdown_command = "shutdown /s /t 0 /f"
+  # sysprep.ps1 calls shutdown.exe after virtio restore; WinRM is often unusable by then.
+  # Return success here so Packer waits for the QEMU process to exit instead of another WinRM round-trip.
+  shutdown_command = "cmd /c exit 0"
   shutdown_timeout = "120m"
 }
 
