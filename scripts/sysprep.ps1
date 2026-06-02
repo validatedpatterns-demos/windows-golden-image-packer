@@ -159,44 +159,47 @@ function Wait-SysprepWithProgress {
 
     Remove-Item -Path $sysprepStdout, $sysprepStderr -Force -ErrorAction SilentlyContinue
 
-    $proc = Start-Process -FilePath $SysprepPath -ArgumentList $SysprepArgs -PassThru -NoNewWindow `
-        -RedirectStandardOutput $sysprepStdout -RedirectStandardError $sysprepStderr
+    $shutdownGuard = Start-SysprepShutdownGuard
+    try {
+        $proc = Start-Process -FilePath $SysprepPath -ArgumentList $SysprepArgs -PassThru -NoNewWindow `
+            -RedirectStandardOutput $sysprepStdout -RedirectStandardError $sysprepStderr
 
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    $lastSetupActSize = 0L
+        $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $lastSetupActSize = 0L
+        $lastLogAt = [datetime]::MinValue
 
-    while (-not $proc.HasExited) {
-        if ((Get-Date) -gt $deadline) {
-            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
-            Save-SysprepDiagnostics "sysprep timeout after ${TimeoutMinutes}m"
-            Write-SysprepDiagnosticLogs
-            throw "sysprep.exe did not finish within ${TimeoutMinutes} minutes. Check VNC (./scripts/show-packer-console.sh) and $diagLog"
-        }
+        while (-not $proc.HasExited) {
+            Cancel-PendingGuestShutdown
+            if ((Get-Date) -gt $deadline) {
+                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+                Save-SysprepDiagnostics "sysprep timeout after ${TimeoutMinutes}m"
+                Write-SysprepDiagnosticLogs
+                throw "sysprep.exe did not finish within ${TimeoutMinutes} minutes. Check VNC (./scripts/show-packer-console.sh) and $diagLog"
+            }
 
-        foreach ($dir in @($sysprepPanther, $panther)) {
-            $setupAct = Join-Path $dir 'setupact.log'
-            if (-not (Test-Path $setupAct)) { continue }
-            $size = (Get-Item -LiteralPath $setupAct).Length
-            if ($size -gt $lastSetupActSize) {
-                $lastSetupActSize = $size
-                Write-Host "=== tail $setupAct ==="
-                $tail = Get-LogTail -Path $setupAct -Lines 8
-                $tail | ForEach-Object { Write-Host $_ }
-                if (($tail -join "`n") -match 'Sysprep_succeeded\.tag|InitiateSystemShutdownEx') {
-                    Cancel-PendingGuestShutdown
+            foreach ($dir in @($sysprepPanther, $panther)) {
+                $setupAct = Join-Path $dir 'setupact.log'
+                if (-not (Test-Path $setupAct)) { continue }
+                $size = (Get-Item -LiteralPath $setupAct).Length
+                if ($size -gt $lastSetupActSize) {
+                    $lastSetupActSize = $size
+                    if (((Get-Date) - $lastLogAt).TotalSeconds -ge 15) {
+                        $lastLogAt = Get-Date
+                        Write-Host "=== tail $setupAct ==="
+                        Get-LogTail -Path $setupAct -Lines 8 | ForEach-Object { Write-Host $_ }
+                    }
                 }
             }
+
+            Start-Sleep -Seconds 2
         }
 
-        if (Test-SysprepGeneralizeSucceeded) {
-            Cancel-PendingGuestShutdown
-        }
-
-        Start-Sleep -Seconds 60
+        Cancel-PendingGuestShutdown
+        return Resolve-SysprepProcessExit -ExitCode $proc.ExitCode
     }
-
-    Cancel-PendingGuestShutdown
-    return Resolve-SysprepProcessExit -ExitCode $proc.ExitCode
+    finally {
+        Stop-SysprepShutdownGuard -Job $shutdownGuard
+    }
 }
 
 function Invoke-GuestShutdown {
@@ -232,12 +235,40 @@ function Test-SysprepNotAlreadyGeneralized {
     }
 }
 
-function Test-SysprepGeneralizeSucceeded {
-    return Test-Path -LiteralPath 'C:\Windows\System32\Sysprep\Sysprep_succeeded.tag'
-}
-
 function Cancel-PendingGuestShutdown {
     & "$env:SystemRoot\System32\shutdown.exe" /a 2>&1 | Out-Null
+}
+
+function Start-SysprepShutdownGuard {
+    $sb = {
+        while ($true) {
+            & "$env:SystemRoot\System32\shutdown.exe" /a 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 400
+        }
+    }
+    return Start-Job -Name 'SysprepShutdownGuard' -ScriptBlock $sb
+}
+
+function Stop-SysprepShutdownGuard {
+    param($Job)
+    if (-not $Job) { return }
+    Stop-Job -Job $Job -Force -ErrorAction SilentlyContinue
+    Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
+}
+
+function Test-SysprepGeneralizeSucceeded {
+    if (Test-Path -LiteralPath 'C:\Windows\System32\Sysprep\Sysprep_succeeded.tag') {
+        return $true
+    }
+    foreach ($dir in @($sysprepPanther, $panther)) {
+        $setupAct = Join-Path $dir 'setupact.log'
+        if (-not (Test-Path -LiteralPath $setupAct)) { continue }
+        $tail = (Get-Content -Path $setupAct -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
+        if ($tail -match 'Sysprep_succeeded\.tag') {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Wait-ForSysprepSucceededTag {
@@ -386,15 +417,16 @@ try {
     }
 
     $unattend = $generalizeUnattend
-    # sysprep /generalize still calls InitiateSystemShutdownEx on success even without /shutdown;
-    # sysprep.ps1 cancels that so virtio restore + OOBE unattend run before Packer powers off.
+    # /quit: do not reboot or shut down after generalize — post-sysprep virtio restore and OOBE
+    # unattend must run while WinRM is still up. Without /quit, sysprep calls InitiateSystemShutdownEx
+    # on success and Packer sees exit 16001 before restore-virtio-boot-after-sysprep.ps1 runs.
     $timeoutMin = 45
     if ($env:SYSPREP_TIMEOUT_MINUTES -match '^\d+$') {
         $timeoutMin = [int]$env:SYSPREP_TIMEOUT_MINUTES
     }
     # /quiet suppresses confirmation dialogs that can block sysprep headless under QEMU.
-    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', "/unattend:$unattend")
-    Write-Host ('Running sysprep ' + ($sysprepArgs -join ' ') + " (timeout ${timeoutMin}m, setupact.log tailed every 60s)")
+    $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', '/quit', "/unattend:$unattend")
+    Write-Host ('Running sysprep ' + ($sysprepArgs -join ' ') + " (timeout ${timeoutMin}m, setupact.log tailed every 15s while running)")
 
     $sysprepExit = Wait-SysprepWithProgress -SysprepPath $sysprep -SysprepArgs $sysprepArgs -TimeoutMinutes $timeoutMin
     $codeLabel = if ($null -eq $sysprepExit) { 'unknown' } else { "$sysprepExit" }
@@ -425,6 +457,7 @@ try {
     }
     & $restoreVirtio
 
+    $global:LASTEXITCODE = 0
     if ($ProvisionerRun) {
         Write-Host 'Sysprep finished under Packer provisioner; Packer shutdown_command will power off the guest.'
     }
