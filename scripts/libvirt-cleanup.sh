@@ -36,33 +36,7 @@ libvirt_domain_is_project() {
 }
 
 # Args: connect name [remove_storage: 0|1]
-# Never pass remove_storage=1 when the domain uses --cdrom with a host ISO path; libvirt can delete that file.
-libvirt_destroy_domain() {
-  local connect="$1" name="$2" remove_storage="${3:-0}"
-
-  if ! virsh --connect "$connect" dominfo "$name" &>/dev/null; then
-    return 0
-  fi
-
-  echo "Removing libvirt domain $name ($connect)" >&2
-  virsh --connect "$connect" destroy "$name" 2>/dev/null || true
-  # UEFI/OVMF domains keep NVRAM; plain undefine fails with "cannot undefine domain with nvram".
-  if ! virsh --connect "$connect" undefine "$name" --nvram 2>/dev/null; then
-    virsh --connect "$connect" undefine "$name" --managed-save --nvram 2>/dev/null || \
-      virsh --connect "$connect" undefine "$name" 2>/dev/null || true
-  fi
-  if virsh --connect "$connect" dominfo "$name" &>/dev/null; then
-    echo "ERROR: failed to undefine libvirt domain $name on $connect (disk may stay locked)." >&2
-    virsh --connect "$connect" dominfo "$name" >&2 || true
-    return 1
-  fi
-
-  # Orphan session NVRAM from OVMF installs (undefine --nvram usually removes it).
-  rm -f "${HOME}/.config/libvirt/qemu/nvram/${name}_VARS.qcow2" 2>/dev/null || true
-  if [[ "$remove_storage" == 1 ]]; then
-    echo "WARN: remove_storage=1 is unsafe if install media was attached via --cdrom; use rm on known paths instead." >&2
-  fi
-}
+# Defined in libvirt-vm-disk.sh (libvirt_destroy_domain).
 
 # Args: [remove_storage: 0|1]
 libvirt_cleanup_project_domains() {

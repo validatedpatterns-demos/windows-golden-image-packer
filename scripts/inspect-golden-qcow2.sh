@@ -64,11 +64,14 @@ inspect_hive_control_set() {
   done
 
   cdd_blk="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001" Service 2>/dev/null || true)"
-  if [[ -n "$cdd_blk" ]]; then
+  cdd_blk_sub="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001&subsys_00021af4&rev_00" Service 2>/dev/null || true)"
+  cdd_blk_mod="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1042&subsys_11001af4&rev_01" Service 2>/dev/null || true)"
+  if [[ -n "$cdd_blk" || -n "$cdd_blk_sub" || -n "$cdd_blk_mod" ]]; then
     found=1
-    echo "  ${cs} CriticalDeviceDatabase pci#ven_1af4&dev_1001 -> ${cdd_blk} (expect viostor)"
-    if [[ "$cdd_blk" != viostor ]]; then
-      echo "  FAIL: ${cs} missing viostor CriticalDeviceDatabase entry (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
+    blk_svc="${cdd_blk:-${cdd_blk_sub:-$cdd_blk_mod}}"
+    echo "  ${cs} CriticalDeviceDatabase viostor CDD -> ${blk_svc} (expect viostor)"
+    if [[ "$blk_svc" != viostor ]]; then
+      echo "  FAIL: ${cs} viostor CriticalDeviceDatabase Service=${blk_svc}" >&2
       virtio_rc=1
     fi
   fi
@@ -96,15 +99,22 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivex
     echo "  Select Default=${default_cs_num} (${default_cs})"
 
     any_cs=0
+    default_ok=0
     for i in $(seq 1 9); do
       cs="$(printf 'ControlSet%03d' "$i")"
       if inspect_hive_control_set "$tmp_hive" "$cs"; then
         any_cs=1
+        [[ "$cs" == "$default_cs" ]] && default_ok=1
       fi
     done
     if [[ "$any_cs" -eq 0 ]]; then
       echo "  FAIL: no VirtIO boot driver keys in any ControlSet00N hive" >&2
       virtio_rc=1
+    elif [[ "$default_ok" -ne 1 ]]; then
+      echo "  FAIL: Select Default=${default_cs} has no viostor boot-start keys (INACCESSIBLE_BOOT_DEVICE on disk.bus=virtio)" >&2
+      virtio_rc=1
+    elif [[ "$virtio_rc" -eq 0 ]]; then
+      echo "  OK: viostor boot-start in Select Default and all control sets with VirtIO keys"
     fi
 
     for driver in viostor.sys vioscsi.sys; do

@@ -240,9 +240,6 @@ function Sync-VirtioBootRegistryToAllControlSets {
         ) }
     )
 
-    $select = Get-ItemProperty -Path 'HKLM:\SYSTEM\Select' -ErrorAction SilentlyContinue
-    $currentCs = if ($null -ne $select.Current) { "ControlSet$('{0:D3}' -f [int]$select.Current)" } else { 'ControlSet001' }
-
     $destSets = @()
     Get-ChildItem -Path 'HKLM:\SYSTEM' -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -match '^ControlSet\d+$' } |
@@ -252,10 +249,6 @@ function Sync-VirtioBootRegistryToAllControlSets {
     }
 
     foreach ($cs in ($destSets | Select-Object -Unique)) {
-        if ($cs -eq $currentCs) {
-            continue
-        }
-
         $destRoot = "HKLM\SYSTEM\$cs"
         foreach ($svc in @('viostor', 'vioscsi')) {
             $srcSvc = "$sourceRoot\Services\$svc"
@@ -280,7 +273,23 @@ function Sync-VirtioBootRegistryToAllControlSets {
         }
     }
 
+    Set-VirtioBootControlSetSelect
     Write-Host 'Sync-VirtioBootRegistryToAllControlSets complete'
+}
+
+function Set-VirtioBootControlSetSelect {
+    # First boot after sysprep uses Select\Default; pin it to the control set we just repaired.
+    $selectPath = 'HKLM:\SYSTEM\Select'
+    if (-not (Test-Path $selectPath)) {
+        throw 'Missing HKLM\SYSTEM\Select'
+    }
+    $current = (Get-ItemProperty -Path $selectPath -Name 'Current' -ErrorAction Stop).Current
+    Set-ItemProperty -Path $selectPath -Name 'Default' -Value $current -Type DWord -Force
+    Set-ItemProperty -Path $selectPath -Name 'LastKnownGood' -Value $current -Type DWord -Force
+    if (Get-ItemProperty -Path $selectPath -Name 'Failed' -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $selectPath -Name 'Failed' -ErrorAction SilentlyContinue
+    }
+    Write-Host "Select: Default/LastKnownGood -> ControlSet$('{0:D3}' -f [int]$current)"
 }
 
 function Install-VirtioBootBinding {

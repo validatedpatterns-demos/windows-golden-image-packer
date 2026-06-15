@@ -277,8 +277,7 @@ cleanup() {
       packer_ovmf_stop_qemu "$WORK_DIR" 2>/dev/null || true
     fi
   elif [[ "$KEEP_VM" != 1 && -n "$VM_NAME" ]]; then
-    virsh --connect "$CONNECT" destroy "$VM_NAME" 2>/dev/null || true
-    virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
+    libvirt_destroy_domain "$CONNECT" "$VM_NAME" 0 || true
   fi
   if [[ "$KEEP_DISK" != 1 && -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
@@ -413,11 +412,7 @@ if libvirt_uses_system_qemu; then
   libvirt_prepare_system_boot_test_disks "$TEST_DISK" "$IMAGE" || exit 1
 fi
 
-if virsh --connect "$CONNECT" dominfo "$VM_NAME" &>/dev/null; then
-  echo "Removing existing domain $VM_NAME" >&2
-  virsh --connect "$CONNECT" destroy "$VM_NAME" 2>/dev/null || true
-  virsh --connect "$CONNECT" undefine "$VM_NAME" 2>/dev/null || true
-fi
+libvirt_destroy_domain "$CONNECT" "$VM_NAME" 0 || exit 1
 
 GRAPHICS_ARGS=(--graphics vnc,listen=127.0.0.1)
 [[ "$GRAPHICS" == none ]] && GRAPHICS_ARGS=(--graphics none)

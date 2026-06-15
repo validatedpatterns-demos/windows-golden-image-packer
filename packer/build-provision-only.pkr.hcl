@@ -230,6 +230,7 @@ build {
   post-processor "shell-local" {
     inline = [
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-provision\" \"${local.output_image_name}\"",
+      "INSPECT_VIRTIO_STRICT=1 bash \"${path.root}/../scripts/inspect-golden-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]
   }
@@ -313,6 +314,7 @@ build {
   post-processor "shell-local" {
     inline = [
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-provision\" \"${local.output_image_name}\"",
+      "INSPECT_VIRTIO_STRICT=1 bash \"${path.root}/../scripts/inspect-golden-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]
   }
