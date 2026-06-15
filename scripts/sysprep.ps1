@@ -518,9 +518,12 @@ try {
     & $restoreVirtio
 
     $global:LASTEXITCODE = 0
-    # Generalize can break WinRM before Packer's shutdown_command runs; power off locally and let
-    # Packer wait for the QEMU process to exit instead of another WinRM round-trip.
-    Invoke-GuestShutdown
+    if ($ProvisionerRun) {
+        Write-Host 'Leaving guest running for Packer shutdown_command (graceful WinRM shutdown).'
+    }
+    else {
+        Invoke-GuestShutdown
+    }
     exit 0
 }
 catch {

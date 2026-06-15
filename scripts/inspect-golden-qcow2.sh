@@ -32,7 +32,7 @@ if command -v virt-filesystems >/dev/null 2>&1; then
   golden_image_has_efi_partition "$IMAGE" || efi_rc=$?
   if [[ "$efi_rc" -eq 0 ]]; then
     echo "Firmware hint: UEFI (EFI system partition present)"
-    echo "Recommended boot-test: make boot-test (libvirt qemu:///system, virtio-blk + guest-agent)"
+    echo "Recommended boot-test: make boot-test (libvirt qemu:///session, virtio-blk + guest-agent)"
     echo "Packer OVMF replay:    BOOT_TEST_METHOD=packer make boot-test-image IMAGE=..."
   elif [[ "$efi_rc" -eq 2 ]]; then
     echo "Firmware hint: unknown (could not inspect partitions with libguestfs)"

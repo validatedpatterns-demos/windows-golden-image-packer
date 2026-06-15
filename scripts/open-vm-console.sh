@@ -12,7 +12,7 @@ if [[ "${1:-}" == "--background" ]]; then
   shift
 fi
 
-CONNECT="${1:-qemu:///system}"
+CONNECT="${1:-qemu:///session}"
 DOMAIN="${2:?domain name required}"
 
 run_viewer() {

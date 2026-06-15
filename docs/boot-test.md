@@ -2,7 +2,7 @@
 
 Boot tests validate that a built **qcow2** starts without modifying the golden file you upload or publish.
 
-**Default (UEFI and SeaBIOS):** `boot-test-image.sh` uses **libvirt `qemu:///system`** with **virtio-scsi** root disk, **virtio** NIC, and a **QEMU guest-agent channel** (`org.qemu.guest_agent.0`). Readiness is checked with `virsh domifaddr --source agent` (requires `02-install-qemu-guest-agent.ps1` in the image). **virt-viewer** opens on the system libvirt session for console visibility.
+**Default (UEFI and SeaBIOS):** `boot-test-image.sh` uses **libvirt `qemu:///session`**, **virtio-blk** root disk (`disk.bus: virtio` — same as OpenShift), **virtio** NIC, and a **QEMU guest-agent channel**. Before starting the VM it runs **`inspect-golden-qcow2.sh`** offline; boot-test **fails** if **viostor** is not boot-start in the golden image. There is **no** scsi/sata fallback — a blue screen or boot failure means the golden build is not OpenShift-ready.
 
 **Alternate:** `BOOT_TEST_METHOD=packer` replays the **OVMF sysprep Packer** layout (q35, ide-hd on `ide.0`, e1000 user netdev, WinRM port forward, no guest agent). Use that when debugging Packer sysprep boot loops, not for production virtio validation.
 
@@ -37,25 +37,22 @@ First boot after sysprep is fragile. Common causes:
 | Cause | Fix |
 |-------|-----|
 | **vTPM added at boot-test** but sysprep ran without TPM | Default is now **`BOOT_TEST_TPM=0`** (matches `provision_sysprep_vtpm=false`). Do not set `BOOT_TEST_TPM=1` until after OOBE. |
-| **virtio-blk disk** without boot-bound **viostor** | **Rebuild** golden (`enable-virtio-blk-boot-load.ps1`). Temporary: `BOOT_TEST_DISK_BUS=sata`. |
-| Used **`virtio`** (virtio-blk) under OVMF | Use **`scsi`** (virtio-scsi) — OpenShift default. `virtio-blk` usually gives no bootable device. |
+| **virtio-blk disk** without boot-bound **viostor** | Preflight fails or **INACCESSIBLE_BOOT_DEVICE** BSOD — **rebuild** golden (`restore-virtio-boot-after-sysprep.ps1`, `Sync-VirtioBootRegistryToAllControlSets`) |
 | **OOBE unattend parse error** | `./scripts/inspect-golden-unattend.sh output/windows-server-*.qcow2` — rebuild with fixed `sysprep-oobe.xml.tpl`. |
 | OOBE still running / reboot loop | Increase `BOOT_TEST_WAIT=300` `BOOT_TEST_GUEST_WAIT=900`; do not power off during OOBE. |
 
 Quick recovery without rebuild:
 
 ```bash
-BOOT_TEST_TPM=0 make boot-test-image IMAGE=output/windows-server-2022-standard.qcow2
-# fallback if virtio-scsi drivers missing in golden:
-# BOOT_TEST_DISK_BUS=sata make boot-test-image IMAGE=...
+make boot-test-image IMAGE=output/windows-server-2022-standard.qcow2
 ```
 
 ### Failed to boot (OVMF / VM stops)
 
 | Symptom | What to try |
 |--------|-------------|
-| OVMF **no bootable device** with **virtio-blk** | Default boot-test uses **virtio-scsi** (`BOOT_TEST_DISK_BUS=scsi`). Do not use `virtio` (virtio-blk) under OVMF. |
-| OVMF **no bootable device** with **scsi** | Rebuild with current virtio boot-start drivers (`01-install-virtio-drivers.ps1`). Fallback: `BOOT_TEST_DISK_BUS=sata`. |
+| OVMF **no bootable device** with **virtio-blk** | Run `./scripts/inspect-golden-qcow2.sh`; rebuild if VirtIO boot-start registry fails |
+| OVMF **INACCESSIBLE_BOOT_DEVICE** / BSOD on virtio | Same — golden missing viostor in all control sets; rebuild with current sysprep restore scripts |
 | VM stops during first boot | Sysprep OOBE can reboot; use `BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900`. |
 | Guest-agent check fails | OOBE delays agent startup; increase `BOOT_TEST_GUEST_WAIT` or use `BOOT_TEST_CHECK_GUEST=0` temporarily. |
 | **winload.efi** / blue screen after locale changes | Rebuild with current split sysprep answer files. Run `make clean && make build-…`. |
@@ -65,14 +62,14 @@ BOOT_TEST_TPM=0 make boot-test-image IMAGE=output/windows-server-2022-standard.q
 ## How it works
 
 1. **`qemu-img create -b`** builds a copy-on-write overlay under `~/VirtualMachines/boot-test.*` (backing qcow2 stays read-only).
-2. **Default (`BOOT_TEST_METHOD=libvirt`):** `virt-install --import` on **`qemu:///system`**: q35 + OVMF, **virtio-blk** root disk (`BOOT_TEST_DISK_BUS=virtio`), **virtio** NIC, **guest-agent channel**, **no vTPM** by default.
+2. **Default (`BOOT_TEST_METHOD=libvirt`):** `virt-install --import` on **`qemu:///session`**: q35 + OVMF, **virtio-blk** root disk (fixed; OpenShift `disk.bus: virtio`), **virtio** NIC, **guest-agent channel**, **no vTPM** by default. Offline **viostor** preflight via `inspect-golden-qcow2.sh`.
 3. **Alternate (`BOOT_TEST_METHOD=packer`):** raw `qemu-system-x86_64` with the OVMF sysprep Packer device list (`scripts/packer-ovmf-sysprep-qemu.sh`): ide-hd on `ide.0`, e1000 user netdev, WinRM host port forward.
 4. The test checks that the VM **stays running**, optionally **guest-agent IP** (libvirt) or **WinRM** (packer), and that the **golden file size/mtime** did not change.
 5. The libvirt domain / QEMU process and overlay are removed on exit (unless you keep them for debugging).
 
-**Libvirt method** requires libvirt, the `default` network on the chosen URI, `swtpm` when TPM is enabled, and **POSIX ACLs** when disks live under `$HOME` with `qemu:///system`.
+**Libvirt method** requires libvirt and a reachable network on the chosen URI. Session libvirt often has no `default` network defined; boot-test reuses the system **`virbr0`** NAT bridge when it is already up, otherwise **user-mode** SLIRP networking.
 
-If you prefer not to use ACLs, run with `BOOT_TEST_CONNECT=qemu:///session` so the VM runs as your user (session libvirt, not the system hypervisor).
+**Disk bus:** UEFI boot-test **always** uses **virtio-blk**. Preflight must pass `./scripts/inspect-golden-qcow2.sh` before the VM starts.
 
 ## Quick usage
 
@@ -104,15 +101,16 @@ Pass flags through `boot-test-golden.sh` to `boot-test-image.sh`:
 
 | Flag / variable | Default | Meaning |
 |-----------------|---------|---------|
-| `BOOT_TEST_METHOD` / `--method` | `libvirt` | System libvirt with virtio-scsi + guest-agent; `packer` replays OVMF sysprep QEMU |
+| `BOOT_TEST_METHOD` / `--method` | `libvirt` | Session libvirt + **virtio-blk** + guest-agent; `packer` replays OVMF sysprep QEMU |
 | `BOOT_TEST_FIRMWARE` / `--firmware` | matches `efi_boot` in `build.pkrvars.hcl` (`uefi` by default) | Must match how the qcow2 was installed (`uefi` for OpenShift images) |
-| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `virtio` (virtio-blk) | OpenShift `disk.bus: virtio`; use `scsi` for virtio-scsi |
+| `BOOT_TEST_DISK_BUS` / `--disk-bus` | `virtio` (fixed for UEFI) | OpenShift `disk.bus: virtio`; not overridable on UEFI boot-test |
 | `BOOT_TEST_WAIT` / `--wait` | `180` | Seconds the VM must stay up before guest checks |
 | `BOOT_TEST_GUEST_WAIT` / `--guest-wait` | `600` | Max seconds to wait for guest-agent IP (libvirt) or WinRM (packer) |
 | `BOOT_TEST_CHECK_GUEST` | `1` | Set `0` or `--no-guest-check` to only verify the VM process stays running |
 | `BOOT_TEST_GRAPHICS` / `--graphics` | `vnc` | `none` for headless automation |
 | `BOOT_TEST_SHOW_CONSOLE` / `--no-console` | `1` | Launch **virt-viewer** (libvirt) or **vncviewer** (packer) |
-| `BOOT_TEST_CONNECT` | `qemu:///system` | libvirt URI |
+| `BOOT_TEST_CONNECT` | `qemu:///session` | libvirt URI (`qemu:///system` needs ACLs for disks under `$HOME`) |
+| `BOOT_TEST_NETWORK` | *(auto)* | `network=default`, `bridge=virbr0`, or `user` (+ `model=virtio`) |
 | `BOOT_TEST_TPM` | `0` (from `provision_sysprep_vtpm`) | Set `1` only to test vTPM after OOBE works |
 | `BOOT_TEST_KEEP_VM` / `--keep-vm` | `0` | Leave the domain defined after the test |
 | `BOOT_TEST_WORK_DIR` | `~/VirtualMachines` | Parent directory for overlay qcow2 (`boot-test.*` subdirs) |
@@ -164,8 +162,4 @@ chmod u+rw output/windows-server-2022-standard.qcow2
 
 Then re-run boot-test. The script reclaims ownership automatically when **passwordless sudo** is available, and tries again in **cleanup** after the test.
 
-Requires **`acl`** for runtime (`dnf install acl`). Without passwordless sudo, use session libvirt:
-
-```bash
-BOOT_TEST_CONNECT=qemu:///session make boot-test-image IMAGE=...
-```
+Session libvirt (default) avoids this for new tests. For **`qemu:///system`**, install **`acl`** (`dnf install acl`).

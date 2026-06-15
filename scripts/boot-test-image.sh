@@ -4,16 +4,17 @@
 #!/usr/bin/env bash
 # Boot-test a golden qcow2 without modifying it (overlay qcow2; backing stays read-only).
 #
-# Default: libvirt on qemu:///system with virtio-scsi disk, virtio NIC, and a guest-agent
-# channel (domifaddr --source agent). Use BOOT_TEST_METHOD=packer to replay the OVMF
+# Default: libvirt on qemu:///session with virtio-blk disk (OpenShift disk.bus=virtio),
+# virtio NIC, and a guest-agent channel (domifaddr --source agent). Use BOOT_TEST_METHOD=packer to replay the OVMF
 # sysprep Packer QEMU layout (ide.0 + e1000 user netdev, WinRM port forward).
 #
 # Usage:
 #   boot-test-image.sh [options] [IMAGE.qcow2]
 #
 # Environment (defaults shown):
-#   BOOT_TEST_METHOD=libvirt|packer    # default: libvirt (virtio-scsi + guest-agent on system libvirt)
-#   BOOT_TEST_CONNECT=qemu:///system   # libvirt URI (default; use qemu:///session to skip ACLs)
+#   BOOT_TEST_METHOD=libvirt|packer    # default: libvirt (virtio + guest-agent on session libvirt)
+#   BOOT_TEST_CONNECT=qemu:///session  # libvirt URI (use qemu:///system for system libvirt + ACLs)
+#   BOOT_TEST_NETWORK=               # optional: network=default, bridge=virbr0, user (model=virtio added)
 #   BOOT_TEST_FIRMWARE=uefi
 #   BOOT_TEST_MEMORY=8192
 #   BOOT_TEST_VCPUS=4
@@ -23,7 +24,7 @@
 #   BOOT_TEST_GRAPHICS=vnc
 #   BOOT_TEST_SHOW_CONSOLE=1
 #   BOOT_TEST_TPM=0                 # default: off (matches provision_sysprep_vtpm=false)
-#   BOOT_TEST_DISK_BUS=virtio         # libvirt uefi: virtio-blk (OpenShift disk.bus: virtio)
+#   BOOT_TEST_DISK_BUS=virtio         # UEFI boot-test always uses virtio (not overridable)
 #   BOOT_TEST_KEEP_VM=0
 #   BOOT_TEST_KEEP_DISK=0
 #   BOOT_TEST_WORK_DIR=$HOME/VirtualMachines
@@ -37,7 +38,17 @@ source "$ROOT/scripts/libvirt-vm-disk.sh"
 # shellcheck source=scripts/packer-ovmf-sysprep-qemu.sh
 source "$ROOT/scripts/packer-ovmf-sysprep-qemu.sh"
 
-CONNECT="${BOOT_TEST_CONNECT:-$(libvirt_default_connect)}"
+require_cmd() {
+  local c
+  for c in "$@"; do
+    command -v "$c" >/dev/null || {
+      echo "Required command not found: $c" >&2
+      exit 1
+    }
+  done
+}
+
+CONNECT="$(libvirt_boot_test_default_connect)"
 METHOD="${BOOT_TEST_METHOD:-}"
 
 default_firmware() {
@@ -90,13 +101,13 @@ usage() {
   echo "  --image PATH       qcow2 to test (default: newest golden under output/)"
   echo "  --name NAME        libvirt domain name (default: boot-test-<image-basename>)"
   echo "  --firmware bios|uefi"
-  echo "  --method libvirt|packer   default: libvirt (qemu:///system, virtio-scsi, guest-agent)"
+  echo "  --method libvirt|packer   default: libvirt (qemu:///session, virtio, guest-agent)"
   echo "  --memory MB        --vcpus N"
   echo "  --wait SECONDS     --guest-wait SECONDS"
   echo "  --no-guest-check   skip QEMU guest-agent IP check"
   echo "  --graphics vnc|none"
   echo "  --no-console       do not open virt-viewer"
-  echo "  --disk-bus virtio|scsi|sata   root disk (default: virtio = virtio-blk / OpenShift bus: virtio)"
+  echo "  --disk-bus virtio   UEFI boot-test always uses virtio-blk (OpenShift disk.bus: virtio)"
   echo "  --keep-vm --keep-disk"
   echo "  --dry-run"
   exit "${1:-0}"
@@ -162,10 +173,21 @@ IMAGE="$(readlink -f "$IMAGE")"
 
 if [[ -z "$DISK_BUS" ]]; then
   if [[ "$FIRMWARE" == "uefi" ]]; then
-    DISK_BUS="${BOOT_TEST_DISK_BUS:-$(default_uefi_disk_bus)}"
+    DISK_BUS=virtio
   else
     DISK_BUS="${BOOT_TEST_DISK_BUS:-virtio}"
   fi
+fi
+
+if [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" != "virtio" ]]; then
+  echo "ERROR: boot-test validates OpenShift disk.bus=virtio (virtio-blk) only; got disk bus '$DISK_BUS'." >&2
+  echo "  Unset BOOT_TEST_DISK_BUS / --disk-bus, or rebuild the golden image for virtio-blk boot." >&2
+  exit 1
+fi
+
+if [[ -n "${BOOT_TEST_DISK_BUS:-}" && "$BOOT_TEST_DISK_BUS" != "virtio" && "$FIRMWARE" == "uefi" ]]; then
+  echo "ERROR: BOOT_TEST_DISK_BUS=${BOOT_TEST_DISK_BUS} is not allowed; boot-test requires virtio." >&2
+  exit 1
 fi
 
 case "$DISK_BUS" in
@@ -212,6 +234,25 @@ case "$METHOD" in
     ;;
 esac
 
+BOOT_TEST_NET_SPEC=""
+if [[ "$METHOD" == "libvirt" ]]; then
+  require_cmd virsh
+  if ! virsh --connect "$CONNECT" uri &>/dev/null; then
+    echo "Cannot connect to libvirt: $CONNECT" >&2
+    exit 1
+  fi
+  BOOT_TEST_NET_SPEC="$(libvirt_boot_test_network_spec "$CONNECT")"
+fi
+
+if [[ "$FIRMWARE" == "uefi" ]]; then
+  echo "Preflight: offline VirtIO-blk boot-start registry (OpenShift disk.bus=virtio)..." >&2
+  if ! INSPECT_VIRTIO_STRICT=1 "$ROOT/scripts/inspect-golden-qcow2.sh" "$IMAGE"; then
+    echo "FAIL: golden image is not ready for virtio-blk boot-test." >&2
+    echo "  Rebuild with current restore-virtio-boot-after-sysprep.ps1 / Sync-VirtioBootRegistryToAllControlSets." >&2
+    exit 1
+  fi
+fi
+
 if [[ "$METHOD" == "packer" && "$FIRMWARE" != "uefi" ]]; then
   echo "ERROR: BOOT_TEST_METHOD=packer requires --firmware uefi" >&2
   exit 1
@@ -246,16 +287,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-require_cmd() {
-  local c
-  for c in "$@"; do
-    command -v "$c" >/dev/null || {
-      echo "Required command not found: $c" >&2
-      exit 1
-    }
-  done
-}
-
 libvirt_uses_system_qemu() {
   [[ "$CONNECT" == qemu://* && "$CONNECT" != *session* ]]
 }
@@ -279,6 +310,7 @@ if [[ "$METHOD" == "libvirt" ]]; then
   echo "libvirt:                       $CONNECT"
   echo "Domain:                        $VM_NAME"
   echo "Disk bus:                      $DISK_BUS"
+  echo "Network:                       $BOOT_TEST_NET_SPEC"
 fi
 
 if [[ "$METHOD" == "packer" ]]; then
@@ -368,16 +400,6 @@ fi
 
 require_cmd virsh virt-install qemu-img stat
 
-if ! virsh --connect "$CONNECT" uri &>/dev/null; then
-  echo "Cannot connect to libvirt: $CONNECT" >&2
-  exit 1
-fi
-
-if [[ "$CONNECT" == qemu:///system ]] && ! virsh --connect "$CONNECT" net-info default &>/dev/null; then
-  echo "libvirt network 'default' not found on $CONNECT (needed for virtio NIC)" >&2
-  exit 1
-fi
-
 if [[ "$DRY_RUN" == 1 ]]; then
   echo "[dry-run] libvirt_ensure_build_user_read_file + qemu-img create -f qcow2 -F qcow2 -b \"$IMAGE\" \"$TEST_DISK\""
   echo "[dry-run] virt-install --import ... ($DISK_BUS disk, $FIRMWARE)"
@@ -416,11 +438,9 @@ libvirt_disk_args "$TEST_DISK" "$DISK_BUS" "" 1
 libvirt_guest_agent_channel_args
 
 echo "Starting VM (import, ${DISK_BUS} root disk, firmware=${FIRMWARE}, guest-agent channel)..." >&2
-echo "libvirt: $CONNECT (system session — use virt-viewer for console)" >&2
+echo "libvirt: $CONNECT (use virt-viewer for console)" >&2
 if [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" == "virtio" ]]; then
-  echo "Disk: virtio-blk (OpenShift disk.bus: virtio; needs boot-start viostor in golden image)" >&2
-elif [[ "$FIRMWARE" == "uefi" && "$DISK_BUS" == "scsi" ]]; then
-  echo "Disk: virtio-scsi (disk.bus: scsi; needs boot-start vioscsi in golden image)" >&2
+  echo "Disk: virtio-blk (OpenShift disk.bus: virtio; viostor must be boot-start in all control sets)" >&2
 fi
 
 virt-install --connect "$CONNECT" \
@@ -436,7 +456,7 @@ virt-install --connect "$CONNECT" \
   "${TPM_ARGS[@]}" \
   "${DISK_CONTROLLER_ARGS[@]}" \
   "${DISK_DEVICE_ARG[@]}" \
-  --network "network=default,model=virtio" \
+  --network "$BOOT_TEST_NET_SPEC" \
   "${LIBVIRT_GUEST_AGENT_CHANNEL_ARGS[@]}" \
   "${GRAPHICS_ARGS[@]}" \
   --noautoconsole
@@ -473,8 +493,8 @@ state="$(virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true)"
 if [[ "$state" != "running" ]]; then
   echo "FAIL: VM is not running after ${WAIT}s (state=${state:-unknown})" >&2
   echo "Hint: sysprep OOBE reboots are normal; try BOOT_TEST_WAIT=300 BOOT_TEST_GUEST_WAIT=900" >&2
-  echo "Hint: INACCESSIBLE_BOOT_DEVICE on virtio -> rebuild golden with enable-virtio-blk-boot-load.ps1." >&2
-  echo "      Ensure BOOT_TEST_TPM=0 (default). Fallback: BOOT_TEST_DISK_BUS=sata." >&2
+  echo "Hint: INACCESSIBLE_BOOT_DEVICE -> run inspect-golden-qcow2.sh; rebuild if VirtIO boot-start keys fail." >&2
+  echo "      Ensure BOOT_TEST_TPM=0 (default)." >&2
   virsh --connect "$CONNECT" domstate "$VM_NAME" 2>/dev/null || true
   exit 1
 fi

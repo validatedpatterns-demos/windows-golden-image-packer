@@ -178,7 +178,7 @@ golden_image_has_efi_partition() {
   return 1
 }
 
-# OpenShift / KubeVirt default: virtio-blk (libvirt disk bus=virtio). Also stage vioscsi for bus=scsi.
+# OpenShift / KubeVirt: boot-test validates disk.bus=virtio (virtio-blk / viostor boot-start).
 default_uefi_disk_bus() {
   echo virtio
 }
@@ -255,6 +255,51 @@ libvirt_default_connect() {
   echo qemu:///system
 }
 
+# Boot-test defaults to session libvirt (golden qcow2 under $HOME stays owned by the build user).
+# Override with BOOT_TEST_CONNECT=qemu:///system for system libvirt (ACLs required under $HOME).
+libvirt_boot_test_default_connect() {
+  echo "${BOOT_TEST_CONNECT:-qemu:///session}"
+}
+
+# Pick a --network spec for boot-test. Session libvirt often has no "default" network; reuse
+# the system hypervisor NAT bridge (virbr0) when it is already up, else SLIRP user networking.
+# Override with BOOT_TEST_NETWORK=network=default or bridge=virbr0,user,...
+libvirt_boot_test_network_spec() {
+  local connect="$1"
+  local spec="${BOOT_TEST_NETWORK:-}"
+
+  if [[ -n "$spec" ]]; then
+    if [[ "$spec" == *,model=* ]]; then
+      echo "$spec"
+    else
+      echo "${spec},model=virtio"
+    fi
+    return 0
+  fi
+
+  if virsh --connect "$connect" net-info default &>/dev/null; then
+    local state=""
+    state="$(virsh --connect "$connect" net-info default 2>/dev/null | awk -F': *' '/^Active:/ {print $2}')"
+    if [[ "$state" != "yes" ]]; then
+      virsh --connect "$connect" net-start default &>/dev/null || true
+      state="$(virsh --connect "$connect" net-info default 2>/dev/null | awk -F': *' '/^Active:/ {print $2}')"
+    fi
+    if [[ "$state" == "yes" ]]; then
+      echo "network=default,model=virtio"
+      return 0
+    fi
+  fi
+
+  if [[ "$connect" == *session* ]] && ip link show virbr0 &>/dev/null; then
+    echo "Boot-test network: bridge=virbr0 (system libvirt NAT; session has no active default network)" >&2
+    echo "bridge=virbr0,model=virtio"
+    return 0
+  fi
+
+  echo "Boot-test network: user-mode NAT (no libvirt default network on $connect)" >&2
+  echo "user,model=virtio"
+}
+
 libvirt_check_build_prereqs() {
   local connect="${1:-$(libvirt_default_connect)}"
   local user
@@ -322,7 +367,7 @@ libvirt_reclaim_backing_for_build_user() {
   echo "ERROR: cannot read backing file: $backing" >&2
   echo "  A prior qemu:///system boot-test likely left it owned by $(libvirt_qemu_user)." >&2
   echo "  Run: sudo chown $build_user:$build_user '$backing' && chmod u+rw '$backing'" >&2
-  echo "  Or: BOOT_TEST_CONNECT=qemu:///session make boot-test-image ..." >&2
+  echo "  Or: BOOT_TEST_CONNECT=qemu:///system make boot-test-image ... (needs ACLs under \$HOME)" >&2
   return 1
 }
 
@@ -344,7 +389,7 @@ libvirt_prepare_system_boot_test_disks() {
 
   if ! command -v setfacl >/dev/null 2>&1; then
     echo "ERROR: setfacl is required for qemu:///system boot-test under \$HOME (dnf install acl)." >&2
-    echo "  Or set BOOT_TEST_CONNECT=qemu:///session to run VMs as your user." >&2
+    echo "  Or set BOOT_TEST_CONNECT=qemu:///system (needs ACLs under \$HOME)." >&2
     return 1
   fi
 

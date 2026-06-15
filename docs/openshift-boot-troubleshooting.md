@@ -27,7 +27,7 @@ Inspect an image:
 
 ```bash
 ./scripts/inspect-golden-qcow2.sh output/windows-server-2025-standard.qcow2
-make boot-test-2025   # libvirt qemu:///system + virtio-scsi by default
+make boot-test-2025   # libvirt qemu:///session + virtio-blk (OpenShift gate)
 ```
 
 **Rebuild** after changing this; old qcow2 files will not self-heal.
