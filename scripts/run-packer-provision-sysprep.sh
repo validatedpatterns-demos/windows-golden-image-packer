@@ -56,8 +56,13 @@ echo "  Prep disk: $BASE_IMAGE"
 echo "  Packer work directory: $WORK_DIR"
 echo "  While the VM runs: ./scripts/show-packer-console.sh  (VNC port + work path)"
 echo "  Sysprep normally finishes in 10-25 minutes; setupact.log tails every 60s after 'Running sysprep'."
+echo "  Guest shutdown after sysprep: typically 2-10 minutes (wait script SIGTERM after 30m if stuck)."
 echo "  If sysprep exceeds 45 minutes it fails with diagnostics (SYSPREP_TIMEOUT_MINUTES to override)."
 echo ""
+
+edition_lc="$(echo "${WINDOWS_EDITION}" | tr '[:upper:]' '[:lower:]')"
+vm_name="packer-win${VERSION}-${edition_lc}-provision"
+bash "$ROOT/scripts/stop-stale-packer-qemu.sh" "$vm_name"
 
 cd "$PACKER_DIR"
 packer_args=(

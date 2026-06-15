@@ -227,15 +227,29 @@ function Wait-SysprepWithProgress {
     }
 }
 
+function Stop-OrphanSysprepShutdownGuards {
+    # If Stop-SysprepShutdownGuard failed, the guard loops shutdown /a and blocks Invoke-GuestShutdown.
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*sysprep-shutdown-guard.ps1*' } |
+        ForEach-Object {
+            Write-Host "Stopping orphan sysprep shutdown guard (pid $($_.ProcessId))"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+}
+
 function Invoke-GuestShutdown {
+    Stop-OrphanSysprepShutdownGuards
+    Cancel-PendingGuestShutdown
+
     Write-Host 'Forcing guest shutdown for Packer (sysprep runs without /shutdown so OOBE unattend can be restored first).'
     & "$env:SystemRoot\System32\shutdown.exe" /s /t 0 /f
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "shutdown.exe exit $LASTEXITCODE; trying Stop-Computer -Force"
-        Stop-Computer -Force -ErrorAction SilentlyContinue
     }
-    Start-Sleep -Seconds 5
-    Write-Host 'Shutdown requested; Packer will wait for the VM to power off.'
+    # Stop-Computer -Force complements shutdown.exe on Server when services stall power-off.
+    Stop-Computer -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    Write-Host 'Shutdown requested; host wait-packer-qemu-exit.sh waits for QEMU to exit.'
 }
 
 function Remove-PhantomVirtioBootDevices {
@@ -518,12 +532,9 @@ try {
     & $restoreVirtio
 
     $global:LASTEXITCODE = 0
-    if ($ProvisionerRun) {
-        Write-Host 'Leaving guest running for Packer shutdown_command (graceful WinRM shutdown).'
-    }
-    else {
-        Invoke-GuestShutdown
-    }
+    # Generalize breaks WinRM before Packer shutdown; power off locally. OVMF builds use
+    # wait-packer-qemu-exit.sh on the host so Packer skips WinRM shutdown_command.
+    Invoke-GuestShutdown
     exit 0
 }
 catch {

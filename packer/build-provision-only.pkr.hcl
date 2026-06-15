@@ -96,10 +96,10 @@ source "qemu" "from_install_gpt" {
   winrm_use_ssl  = false
   winrm_port     = 5985
 
-  # sysprep.ps1 skips Invoke-GuestShutdown when SYSPREP_PROVISIONER_RUN=1 so WinRM stays up for
-  # this command. Do not use shutdown_command="" — that force-kills QEMU and leaves NTFS dirty
-  # (libguestfs then mounts read-only and promote-time Panther repair fails).
-  shutdown_command = "shutdown /s /t 0 /f"
+  # sysprep.ps1 shuts down the guest locally; generalize breaks WinRM (401 on shutdown_command).
+  # wait-packer-qemu-exit.sh (shell-local provisioner) waits for QEMU to exit; empty command
+  # skips a second WinRM round-trip and avoids force-killing a running guest (dirty NTFS).
+  shutdown_command = ""
   shutdown_timeout = "120m"
 }
 
@@ -218,6 +218,15 @@ build {
     scripts          = ["${path.root}/../scripts/sysprep.ps1"]
   }
 
+  provisioner "shell-local" {
+    inline = [
+      "bash \"${path.root}/../scripts/wait-packer-qemu-exit.sh\" \"${local.vm_name}-provision\" 7200",
+    ]
+    environment_vars = [
+      "PACKER_QEMU_FORCE_AFTER=1800",
+    ]
+  }
+
   post-processor "shell-local" {
     inline = [
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}-provision\" \"${local.output_image_name}\"",
@@ -290,6 +299,15 @@ build {
   provisioner "powershell" {
     environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
     scripts          = ["${path.root}/../scripts/sysprep.ps1"]
+  }
+
+  provisioner "shell-local" {
+    inline = [
+      "bash \"${path.root}/../scripts/wait-packer-qemu-exit.sh\" \"${local.vm_name}-provision\" 7200",
+    ]
+    environment_vars = [
+      "PACKER_QEMU_FORCE_AFTER=1800",
+    ]
   }
 
   post-processor "shell-local" {
