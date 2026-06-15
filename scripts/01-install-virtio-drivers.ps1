@@ -222,6 +222,68 @@ function Copy-RegKeyTree {
     }
 }
 
+function Remove-VirtioBootStartOverride {
+    param(
+        [string]$RegistryRoot = 'HKLM:\SYSTEM\CurrentControlSet'
+    )
+
+    $setName = if ($RegistryRoot -match '\\CurrentControlSet$') {
+        'CurrentControlSet'
+    }
+    elseif ($RegistryRoot -match '\\(ControlSet\d+)$') {
+        $Matches[1]
+    }
+    else {
+        throw "Unexpected registry root for StartOverride cleanup: $RegistryRoot"
+    }
+
+    foreach ($svc in @('viostor', 'vioscsi')) {
+        $psPath = "HKLM:\SYSTEM\$setName\Services\$svc\StartOverride"
+        $regPath = "HKLM\SYSTEM\$setName\Services\$svc\StartOverride"
+
+        # reg.exe is reliable on offline-style SYSTEM hives; PowerShell Remove-Item can miss keys
+        # that Windows rewrites during SATA/IDE boots between verify and shutdown.
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+            & reg.exe delete $regPath /f *>$null
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Removed StartOverride for $svc under HKLM:\SYSTEM\$setName via reg.exe"
+        }
+        elseif ($LASTEXITCODE -ne 1) {
+            throw "reg.exe delete $regPath failed with exit $LASTEXITCODE"
+        }
+        elseif (Test-Path -LiteralPath $psPath) {
+            Remove-Item -LiteralPath $psPath -Recurse -Force
+            Write-Host "Removed StartOverride for $svc under HKLM:\SYSTEM\$setName (PowerShell fallback)"
+        }
+    }
+    $global:LASTEXITCODE = 0
+}
+
+function Remove-VirtioBootStartOverrideAllControlSets {
+    $setNames = @('CurrentControlSet')
+    for ($i = 1; $i -le 9; $i++) {
+        $setNames += ('ControlSet{0:D3}' -f $i)
+    }
+    Get-ChildItem -Path 'HKLM:\SYSTEM' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^ControlSet\d+$' } |
+        ForEach-Object { $setNames += $_.PSChildName }
+
+    foreach ($setName in ($setNames | Select-Object -Unique)) {
+        Remove-VirtioBootStartOverride -RegistryRoot "HKLM:\SYSTEM\$setName"
+    }
+
+    if (Get-Command Set-VirtioBootControlSetSelect -ErrorAction SilentlyContinue) {
+        Set-VirtioBootControlSetSelect
+    }
+    $global:LASTEXITCODE = 0
+}
+
 function Sync-VirtioBootRegistryToAllControlSets {
     # sysprep /generalize can leave a numbered ControlSet00N without VirtIO boot keys while
     # CurrentControlSet has them after restore-virtio-boot-after-sysprep.ps1. First deploy boot
@@ -248,6 +310,8 @@ function Sync-VirtioBootRegistryToAllControlSets {
         $destSets = @('ControlSet001')
     }
 
+    Remove-VirtioBootStartOverride -RegistryRoot 'HKLM:\SYSTEM\CurrentControlSet'
+
     foreach ($cs in ($destSets | Select-Object -Unique)) {
         $destRoot = "HKLM\SYSTEM\$cs"
         foreach ($svc in @('viostor', 'vioscsi')) {
@@ -258,6 +322,7 @@ function Sync-VirtioBootRegistryToAllControlSets {
             }
             Write-Host "Sync VirtIO boot service $svc -> $cs"
             Copy-RegKeyTree -SourcePath $srcSvc -DestPath $dstSvc
+            Remove-VirtioBootStartOverride -RegistryRoot "HKLM:\SYSTEM\$cs"
         }
 
         foreach ($entry in $cddEntries) {
@@ -324,6 +389,7 @@ function Install-VirtioBootBinding {
 
     Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
     Sync-VirtioBootRegistryToAllControlSets
+    Remove-VirtioBootStartOverrideAllControlSets
 }
 
 function Install-VirtioDriversMain {

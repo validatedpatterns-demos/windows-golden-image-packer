@@ -10,6 +10,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$installScript = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'
+if (-not (Test-Path -LiteralPath $installScript)) {
+    throw "Missing $installScript"
+}
+. $installScript -SkipMain
+
+# Prep disks from the MBR pass can already have StartOverride=3 (Windows blocks drivers that
+# were not present at install boot). Remove before verify; restore-virtio does this again
+# after sysprep generalize. Offline inspect-golden-qcow2.sh still fails if it remains.
+Remove-VirtioBootStartOverrideAllControlSets
+
 $ViostorCddPaths = @(
     'pci#ven_1af4&dev_1001',
     'pci#ven_1af4&dev_1001&subsys_00021af4&rev_00',
@@ -31,6 +42,11 @@ function Test-BootDriver {
     $start = (Get-ItemProperty -Path $key -Name 'Start' -ErrorAction SilentlyContinue).Start
     if ($start -ne 0) {
         throw "Driver $ServiceName under $RegistryRoot is not boot-start (Start=$start, expected 0)"
+    }
+
+    $override = Join-Path $key 'StartOverride'
+    if (Test-Path -LiteralPath $override) {
+        throw "Driver $ServiceName under $RegistryRoot still has StartOverride after cleanup (expected absent)"
     }
 
     if ($RequireDriverFile) {
@@ -81,7 +97,7 @@ if ($AllControlSets) {
     Get-ChildItem -Path 'HKLM:\SYSTEM' -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -match '^ControlSet\d+$' } |
         ForEach-Object {
-            $roots += @{ Label = $_.PSChildName; Root = $_.PSPath }
+            $roots += @{ Label = $_.PSChildName; Root = "HKLM:\SYSTEM\$($_.PSChildName)" }
         }
 
     $seen = @{}
@@ -96,3 +112,5 @@ else {
 }
 
 Write-Host 'verify-virtio-boot-drivers.ps1 complete'
+$global:LASTEXITCODE = 0
+exit 0

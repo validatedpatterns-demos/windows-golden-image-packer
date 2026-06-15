@@ -61,6 +61,15 @@ inspect_hive_control_set() {
       echo "  FAIL: ${cs} ${svc} is not boot-start (sysprep left a stale control set without VirtIO drivers)" >&2
       virtio_rc=1
     fi
+    for override_key in 0 1 2; do
+      override_val="$(hivexget "$hive" "\\${cs}\\Services\\${svc}\\StartOverride" "$override_key" 2>/dev/null || true)"
+      [[ -n "$override_val" ]] || continue
+      echo "  ${cs} ${svc} StartOverride\\${override_key}=${override_val} (expect absent or 0)"
+      if [[ "$override_val" != 0 ]]; then
+        echo "  FAIL: ${cs} ${svc} StartOverride blocks boot-load at runtime (0x7B on virtio-blk even when Start=0)" >&2
+        virtio_rc=1
+      fi
+    done
   done
 
   cdd_blk="$(hivexget "$hive" "\\${cs}\\Control\\CriticalDeviceDatabase\\pci#ven_1af4&dev_1001" Service 2>/dev/null || true)"

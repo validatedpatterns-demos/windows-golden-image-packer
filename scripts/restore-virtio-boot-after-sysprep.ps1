@@ -25,9 +25,4 @@ if (-not (Test-Path -LiteralPath $verify)) {
 }
 & $verify -AllControlSets
 
-$uefiRepair = Join-Path $PSScriptRoot '07-repair-uefi-boot.ps1'
-if (Test-Path -LiteralPath $uefiRepair) {
-    & $uefiRepair
-}
-
 Write-Host 'restore-virtio-boot-after-sysprep.ps1 complete'

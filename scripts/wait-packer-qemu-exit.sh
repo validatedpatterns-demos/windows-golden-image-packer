@@ -31,6 +31,18 @@ format_elapsed() {
   printf '%dm %ds' $((s / 60)) $((s % 60))
 }
 
+packer_winrm_port() {
+  local line
+  line="$(pgrep -af "qemu-system-x86_64.*${VM_NAME}" 2>/dev/null | head -1 || true)"
+  sed -n 's/.*hostfwd=tcp::\([0-9][0-9]*\)-:5985.*/\1/p' <<<"$line"
+}
+
+winrm_port_open() {
+  local port="$1"
+  [[ -n "$port" ]] || return 1
+  (echo >/dev/tcp/127.0.0.1/"$port") 2>/dev/null
+}
+
 force_stop_qemu() {
   local pid elapsed="$1"
   echo "WARN: QEMU still running after $(format_elapsed "$elapsed") — sending SIGTERM (guest shutdown may be stuck)." >&2
@@ -81,6 +93,14 @@ while ((SECONDS < deadline)); do
   if ((SECONDS - last_log >= LOG_INTERVAL)); then
     echo "  Still waiting ($(format_elapsed elapsed))..." >&2
     pgrep -af "qemu-system-x86_64.*${VM_NAME}" 2>/dev/null | head -1 >&2 || true
+    winrm_port="$(packer_winrm_port || true)"
+    if winrm_port_open "$winrm_port"; then
+      echo "  Guest still running (WinRM 127.0.0.1:${winrm_port} open). Login screen = shutdown failed." >&2
+      echo "  VNC: ./scripts/show-packer-console.sh — sign in as Administrator, then in PowerShell:" >&2
+      echo "    Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | ? { \$_.CommandLine -like '*sysprep-shutdown-guard*' } | % { Stop-Process -Id \$_.ProcessId -Force }" >&2
+      echo "    shutdown /s /t 0 /f" >&2
+      echo "  First verify sysprep succeeded: Test-Path C:\\Windows\\System32\\Sysprep\\Sysprep_succeeded.tag" >&2
+    fi
     last_log=$SECONDS
   fi
 

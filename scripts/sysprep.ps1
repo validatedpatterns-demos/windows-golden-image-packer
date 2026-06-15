@@ -238,18 +238,29 @@ function Stop-OrphanSysprepShutdownGuards {
 }
 
 function Invoke-GuestShutdown {
-    Stop-OrphanSysprepShutdownGuards
-    Cancel-PendingGuestShutdown
-
+    $shutdownExe = "$env:SystemRoot\System32\shutdown.exe"
     Write-Host 'Forcing guest shutdown for Packer (sysprep runs without /shutdown so OOBE unattend can be restored first).'
-    & "$env:SystemRoot\System32\shutdown.exe" /s /t 0 /f
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "shutdown.exe exit $LASTEXITCODE; trying Stop-Computer -Force"
+
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        Stop-OrphanSysprepShutdownGuards
+        Cancel-PendingGuestShutdown
+        Start-Sleep -Milliseconds 400
+
+        Write-Host "Guest shutdown attempt $attempt/6..."
+        & $shutdownExe /s /t 3 /f
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "shutdown.exe exit $LASTEXITCODE on attempt $attempt"
+        }
+
+        Start-Sleep -Seconds 4
+        Stop-OrphanSysprepShutdownGuards
     }
-    # Stop-Computer -Force complements shutdown.exe on Server when services stall power-off.
-    Stop-Computer -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-    Write-Host 'Shutdown requested; host wait-packer-qemu-exit.sh waits for QEMU to exit.'
+
+    # Do not Stop-Computer here: it can end the WinRM session before shutdown.exe wins a race
+    # with a lingering sysprep shutdown guard (guest stays at login; host waits 30m for QEMU).
+    Write-Host 'Shutdown requested; waiting 45s before closing WinRM so the guest can power off.'
+    Start-Sleep -Seconds 45
+    Write-Host 'Host wait-packer-qemu-exit.sh waits for QEMU to exit.'
 }
 
 function Remove-PhantomVirtioBootDevices {
@@ -388,28 +399,75 @@ function Test-SysprepGeneralizeSucceededDespiteExit {
     return Test-SysprepGeneralizeSucceeded
 }
 
-function Get-WindowsBootPartitionSpec {
-    if (Test-Path 'C:\Windows') {
-        return 'C:'
-    }
-    $vol = Get-Partition -ErrorAction SilentlyContinue |
-        Get-Volume -ErrorAction SilentlyContinue |
-        Where-Object { $_.DriveLetter -and (Test-Path "$($_.DriveLetter):\Windows") } |
+function Get-EspBcdDeviceSpec {
+    $esp = Get-Partition -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -or $_.Type -eq 'System'
+        } |
         Select-Object -First 1
-    if ($vol -and $vol.DriveLetter) {
-        return "$($vol.DriveLetter):"
+    if (-not $esp) {
+        throw 'EFI system partition not found for BCD bootmgr repair'
     }
-    throw 'Could not determine Windows boot partition letter for post-sysprep BCD repair'
+    if ($esp.Guid) {
+        return "partition={$($esp.Guid)}"
+    }
+    if ($esp.DriveLetter) {
+        return "partition=$($esp.DriveLetter):"
+    }
+    throw 'ESP has no GPT GUID or drive letter for BCD repair'
+}
+
+function Remove-DuplicateBcdOsLoaders {
+    $defaultEnum = & bcdedit.exe /enum '{default}' /v 2>&1 | Out-String
+    $keepId = '{default}'
+    if ($defaultEnum -match '(?m)^identifier\s+(\{[0-9a-f-]{36}\})') {
+        $keepId = $Matches[1]
+    }
+
+    $loaderEnum = & bcdedit.exe /enum osloader 2>&1 | Out-String
+    $loaderIds = [regex]::Matches($loaderEnum, '(?m)^identifier\s+(\{[0-9a-f-]{36}\})') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique
+
+    foreach ($id in $loaderIds) {
+        if ($id -eq $keepId) {
+            continue
+        }
+        Write-Host "Removing duplicate BCD osloader entry $id (keeping $keepId)"
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+            & bcdedit.exe /delete $id /f 2>&1 | Out-Host
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+    }
+    $global:LASTEXITCODE = 0
 }
 
 function Repair-GeneralizedBcdStore {
-    $part = Get-WindowsBootPartitionSpec
-    Write-Host "Repairing generalized BCD store for first deploy boot (partition=$part)"
-    foreach ($id in @('{default}', '{current}')) {
-        & bcdedit.exe /set $id device "partition=$part" 2>&1 | Out-Host
-        & bcdedit.exe /set $id osdevice "partition=$part" 2>&1 | Out-Host
+    # Sysprep runs on IDE; deploy/boot-test use virtio-blk. Use bcdboot once, then point
+    # {bootmgr}/{default}/{current} at the ESP + boot device — do not bcdedit every osloader
+    # (that duplicated "Windows Server" menu entries and broke device paths -> 0xc000000f).
+    $espSpec = Get-EspBcdDeviceSpec
+
+    $uefiRepair = Join-Path $PSScriptRoot '07-repair-uefi-boot.ps1'
+    if (-not (Test-Path -LiteralPath $uefiRepair)) {
+        throw "Missing $uefiRepair"
     }
-    & bcdedit.exe /set '{bootmgr}' device "partition=$part" 2>&1 | Out-Host
+    & $uefiRepair
+
+    Remove-DuplicateBcdOsLoaders
+
+    Write-Host "Repairing generalized BCD for virtio-blk first boot (bootmgr=$espSpec, default/current=device boot)"
+    & bcdedit.exe /set '{bootmgr}' device $espSpec 2>&1 | Out-Host
+    foreach ($id in @('{default}', '{current}')) {
+        & bcdedit.exe /set $id device boot 2>&1 | Out-Host
+        & bcdedit.exe /set $id osdevice boot 2>&1 | Out-Host
+    }
+    & bcdedit.exe /displayorder '{default}' /addfirst 2>&1 | Out-Host
+    $global:LASTEXITCODE = 0
 }
 
 try {
@@ -490,6 +548,14 @@ try {
 
     Stage-VirtioDriversForSysprep
 
+    $installVirtio = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'
+    if (-not (Test-Path -LiteralPath $installVirtio)) {
+        throw "Missing $installVirtio"
+    }
+    . $installVirtio -SkipMain
+    # OVMF pre-sysprep restart boots SATA/IDE; Windows re-adds StartOverride before generalize.
+    Remove-VirtioBootStartOverrideAllControlSets
+
     $unattend = $generalizeUnattend
     # /quit: do not reboot or shut down after generalize — post-sysprep virtio restore and OOBE
     # unattend must run while WinRM is still up. Without /quit, sysprep calls InitiateSystemShutdownEx
@@ -520,8 +586,6 @@ try {
         }
     }
 
-    Repair-GeneralizedBcdStore
-
     # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
     Restore-OobeUnattend -Reason 'after sysprep generalize'
 
@@ -530,6 +594,21 @@ try {
         throw "Missing $restoreVirtio"
     }
     & $restoreVirtio
+
+    # bcdboot + BCD repair (includes single 07-repair-uefi-boot.ps1 bcdboot pass).
+    Repair-GeneralizedBcdStore
+
+    # bcdboot / generalize can reintroduce StartOverride on Select\Default (ControlSet001).
+    Remove-VirtioBootStartOverrideAllControlSets
+
+    $verifyVirtio = Join-Path $PSScriptRoot 'verify-virtio-boot-drivers.ps1'
+    if (-not (Test-Path -LiteralPath $verifyVirtio)) {
+        throw "Missing $verifyVirtio"
+    }
+    & $verifyVirtio -AllControlSets
+
+    # Windows may rewrite StartOverride during shutdown when the build VM last booted SATA/IDE.
+    Remove-VirtioBootStartOverrideAllControlSets
 
     $global:LASTEXITCODE = 0
     # Generalize breaks WinRM before Packer shutdown; power off locally. OVMF builds use
