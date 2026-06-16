@@ -141,8 +141,8 @@ locals {
     "${path.root}/../drivers/*",
   ]
 
-  # OVMF/q35: match libvirt import layout (ide-hd on ide.0, OVMF pflash as qcow2 — not raw).
-  # Opening OVMF_CODE_4M.qcow2 / efivars with format=raw causes a UEFI boot loop (~100% CPU).
+  # OVMF/q35 sysprep pass: boot from virtio-blk to match OpenShift disk.bus=virtio.
+  # OVMF pflash must stay qcow2 (not raw), otherwise UEFI can loop at high CPU.
   gpt_ovmf_machine = "type=q35,accel=${var.qemu_accelerator},smm=on"
 
   gpt_ovmf_qemuargs = concat(
@@ -153,7 +153,7 @@ locals {
       ["-drive", "if=none,file={{ .OutputDir }}/{{ .Name }},id=disk0,cache=writeback,discard=ignore,format=qcow2"],
       ["-drive", "file=${var.ovmf_code_path},if=pflash,unit=0,format=qcow2,readonly=on"],
       ["-drive", "file={{ .OutputDir }}/efivars.fd,if=pflash,unit=1,format=qcow2"],
-      ["-device", "ide-hd,drive=disk0,bus=ide.0,bootindex=1,write-cache=on"],
+      ["-device", "virtio-blk-pci,drive=disk0,bootindex=1,write-cache=on"],
       ["-device", "${var.install_net_device},netdev=user.0,bootindex=5"],
     ],
     var.provision_sysprep_vtpm ? [["-device", "tpm-tis,tpmdev=tpm0"]] : []

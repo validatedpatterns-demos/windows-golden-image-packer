@@ -320,7 +320,7 @@ if [[ "$METHOD" == "packer" ]]; then
 
   if [[ "$DRY_RUN" == 1 ]]; then
     echo "[dry-run] libvirt_ensure_build_user_read_file + qemu-img create -b ..."
-    echo "[dry-run] packer_ovmf_prepare_workdir + qemu (OVMF sysprep pass: ide.0, qcow2 pflash, no vTPM)"
+    echo "[dry-run] packer_ovmf_prepare_workdir + qemu (OVMF sysprep pass: virtio-blk, qcow2 pflash, no vTPM)"
     packer_ovmf_print_qemu_cmd "$WORK_DIR" "disk.qcow2" "$VM_NAME" 44 4228
     exit 0
   fi

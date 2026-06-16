@@ -417,40 +417,87 @@ function Get-EspBcdDeviceSpec {
     throw 'ESP has no GPT GUID or drive letter for BCD repair'
 }
 
-function Remove-DuplicateBcdOsLoaders {
-    $defaultEnum = & bcdedit.exe /enum '{default}' /v 2>&1 | Out-String
-    $keepId = '{default}'
-    if ($defaultEnum -match '(?m)^identifier\s+(\{[0-9a-f-]{36}\})') {
-        $keepId = $Matches[1]
-    }
+function Get-BcdObjectIds {
+    param(
+        [string[]]$BcdeditArgs
+    )
 
-    $loaderEnum = & bcdedit.exe /enum osloader 2>&1 | Out-String
-    $loaderIds = [regex]::Matches($loaderEnum, '(?m)^identifier\s+(\{[0-9a-f-]{36}\})') |
-        ForEach-Object { $_.Groups[1].Value } |
+    $out = & bcdedit.exe @BcdeditArgs 2>&1 | Out-String
+    return [regex]::Matches($out, '\{[0-9a-f-]{36}\}') |
+        ForEach-Object { $_.Value } |
         Select-Object -Unique
+}
 
-    foreach ($id in $loaderIds) {
-        if ($id -eq $keepId) {
-            continue
-        }
-        Write-Host "Removing duplicate BCD osloader entry $id (keeping $keepId)"
-        $prev = $ErrorActionPreference
-        $ErrorActionPreference = 'SilentlyContinue'
-        try {
-            & bcdedit.exe /delete $id /f 2>&1 | Out-Host
-        }
-        finally {
-            $ErrorActionPreference = $prev
-        }
+function Invoke-BcdeditSilently {
+    param(
+        [string[]]$BcdeditArgs
+    )
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & bcdedit.exe @BcdeditArgs 2>&1 | Out-Host
+    }
+    finally {
+        $ErrorActionPreference = $prev
     }
     $global:LASTEXITCODE = 0
 }
 
+function Remove-AllBcdOsLoaders {
+    foreach ($id in @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))) {
+        Write-Host "Removing stale BCD osloader entry $id before bcdboot rebuild"
+        Invoke-BcdeditSilently -BcdeditArgs @('/delete', $id, '/f')
+    }
+}
+
+function Remove-DuplicateBcdOsLoaders {
+    $defaultEnum = & bcdedit.exe /enum '{default}' /v 2>&1 | Out-String
+    $keepId = '{default}'
+    if ($defaultEnum -match '(\{[0-9a-f-]{36}\})') {
+        $keepId = $Matches[1]
+    }
+
+    foreach ($id in @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))) {
+        if ($id -eq $keepId) {
+            continue
+        }
+        Write-Host "Removing duplicate BCD osloader entry $id (keeping $keepId)"
+        Invoke-BcdeditSilently -BcdeditArgs @('/delete', $id, '/f')
+    }
+}
+
+function Clear-BcdDiskLocateElements {
+    param(
+        [string[]]$ObjectIds
+    )
+
+    foreach ($id in $ObjectIds) {
+        foreach ($elem in @('21000026')) {
+            Invoke-BcdeditSilently -BcdeditArgs @('/deletevalue', $id, $elem)
+        }
+    }
+}
+
+function Reset-BcdBootMenu {
+    # Replace displayorder with a single {default} entry (do not /addfirst — that leaves orphans).
+    Invoke-BcdeditSilently -BcdeditArgs @('/displayorder', '{default}')
+}
+
+function Test-BcdSingleOsLoader {
+    $loaderIds = @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))
+    if ($loaderIds.Count -ne 1) {
+        throw "BCD repair left $($loaderIds.Count) osloader entries (expected 1): $($loaderIds -join ', ')"
+    }
+    Write-Host "BCD osloader count OK: $($loaderIds[0])"
+}
+
 function Repair-GeneralizedBcdStore {
-    # Sysprep runs on IDE; deploy/boot-test use virtio-blk. Use bcdboot once, then point
-    # {bootmgr}/{default}/{current} at the ESP + boot device — do not bcdedit every osloader
-    # (that duplicated "Windows Server" menu entries and broke device paths -> 0xc000000f).
+    # OVMF sysprep boots virtio-blk (OpenShift parity). Rebuild BCD once after generalize:
+    # delete stale osloaders, bcdboot, point bootmgr at ESP, default/current at boot device.
     $espSpec = Get-EspBcdDeviceSpec
+
+    Remove-AllBcdOsLoaders
 
     $uefiRepair = Join-Path $PSScriptRoot '07-repair-uefi-boot.ps1'
     if (-not (Test-Path -LiteralPath $uefiRepair)) {
@@ -460,13 +507,16 @@ function Repair-GeneralizedBcdStore {
 
     Remove-DuplicateBcdOsLoaders
 
-    Write-Host "Repairing generalized BCD for virtio-blk first boot (bootmgr=$espSpec, default/current=device boot)"
+    Write-Host "Repairing generalized BCD for virtio-blk deploy (bootmgr=$espSpec, default/current=device boot)"
     & bcdedit.exe /set '{bootmgr}' device $espSpec 2>&1 | Out-Host
     foreach ($id in @('{default}', '{current}')) {
         & bcdedit.exe /set $id device boot 2>&1 | Out-Host
         & bcdedit.exe /set $id osdevice boot 2>&1 | Out-Host
     }
-    & bcdedit.exe /displayorder '{default}' /addfirst 2>&1 | Out-Host
+    Clear-BcdDiskLocateElements -ObjectIds @('{default}', '{current}')
+    Reset-BcdBootMenu
+    Remove-DuplicateBcdOsLoaders
+    Test-BcdSingleOsLoader
     $global:LASTEXITCODE = 0
 }
 
@@ -553,7 +603,7 @@ try {
         throw "Missing $installVirtio"
     }
     . $installVirtio -SkipMain
-    # OVMF pre-sysprep restart boots SATA/IDE; Windows re-adds StartOverride before generalize.
+    # The pre-sysprep restart can still re-add StartOverride even after virtio restore.
     Remove-VirtioBootStartOverrideAllControlSets
 
     $unattend = $generalizeUnattend
@@ -597,6 +647,12 @@ try {
 
     # bcdboot + BCD repair (includes single 07-repair-uefi-boot.ps1 bcdboot pass).
     Repair-GeneralizedBcdStore
+
+    # Generalize can clone a control set without VirtIO keys; re-sync every numbered hive.
+    if (-not (Get-Command Sync-VirtioBootRegistryToAllControlSets -ErrorAction SilentlyContinue)) {
+        . $installVirtio -SkipMain
+    }
+    Sync-VirtioBootRegistryToAllControlSets
 
     # bcdboot / generalize can reintroduce StartOverride on Select\Default (ControlSet001).
     Remove-VirtioBootStartOverrideAllControlSets

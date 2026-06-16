@@ -56,6 +56,9 @@ for src in "${matches[@]}"; do
   if [[ -x "$ROOT/scripts/repair-golden-panther-unattend.sh" ]]; then
     "$ROOT/scripts/repair-golden-panther-unattend.sh" "$dest"
   fi
+  if [[ -x "$ROOT/scripts/fix-virtio-startoverride-offline.sh" ]]; then
+    "$ROOT/scripts/fix-virtio-startoverride-offline.sh" "$dest"
+  fi
   if [[ -x "$ROOT/scripts/inspect-golden-unattend.sh" ]]; then
     "$ROOT/scripts/inspect-golden-unattend.sh" "$dest"
   fi

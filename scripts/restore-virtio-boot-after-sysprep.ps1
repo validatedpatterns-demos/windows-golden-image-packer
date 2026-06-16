@@ -1,8 +1,8 @@
 # Copyright 2026 Red Hat, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# sysprep /generalize removes VirtIO boot-start services (viostor/vioscsi) because the sysprep
-# VM boots from SATA, not virtio-blk. Re-bind before power-off so OpenShift disk.bus=virtio works.
+# sysprep /generalize can clone a control set without VirtIO boot keys. Re-bind and sync
+# every ControlSet00N before power-off so OpenShift disk.bus=virtio (virtio-blk) works.
 $ErrorActionPreference = 'Stop'
 
 $installScript = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'

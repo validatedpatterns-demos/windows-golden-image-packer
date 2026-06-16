@@ -303,6 +303,12 @@ function Sync-VirtioBootRegistryToAllControlSets {
     )
 
     $destSets = @()
+    for ($i = 1; $i -le 9; $i++) {
+        $cs = 'ControlSet{0:D3}' -f $i
+        if (Test-Path "HKLM:\SYSTEM\$cs") {
+            $destSets += $cs
+        }
+    }
     Get-ChildItem -Path 'HKLM:\SYSTEM' -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -match '^ControlSet\d+$' } |
         ForEach-Object { $destSets += $_.PSChildName }
@@ -357,6 +363,29 @@ function Set-VirtioBootControlSetSelect {
     Write-Host "Select: Default/LastKnownGood -> ControlSet$('{0:D3}' -f [int]$current)"
 }
 
+function Test-VirtioBootBindingCurrent {
+    foreach ($svc in @('viostor', 'vioscsi')) {
+        $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
+        if (-not (Test-Path -LiteralPath $key)) {
+            return $false
+        }
+        $start = (Get-ItemProperty -Path $key -Name 'Start' -ErrorAction SilentlyContinue).Start
+        if ($start -ne 0) {
+            return $false
+        }
+        if (Test-Path -LiteralPath "$key\StartOverride") {
+            return $false
+        }
+    }
+
+    $cdd = 'HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\pci#ven_1af4&dev_1001'
+    if (-not (Test-Path -LiteralPath $cdd)) {
+        return $false
+    }
+    $cddSvc = (Get-ItemProperty -Path $cdd -Name 'Service' -ErrorAction SilentlyContinue).Service
+    return $cddSvc -eq 'viostor'
+}
+
 function Install-VirtioBootBinding {
     param(
         [string]$MediaRoot,
@@ -375,17 +404,22 @@ function Install-VirtioBootBinding {
         'pci#ven_1af4&dev_1042&subsys_11001af4&rev_01'
     )
 
-    $enableBlkBoot = Join-Path $PSScriptRoot 'enable-virtio-blk-boot-load.ps1'
-    if (-not (Test-Path -LiteralPath $enableBlkBoot)) {
-        throw "Missing $enableBlkBoot"
+    if (Test-VirtioBootBindingCurrent) {
+        Write-Host 'VirtIO boot binding already present on CurrentControlSet; skipping phantom device install'
     }
-    & $enableBlkBoot -InfPath $viostorInf
+    else {
+        $enableBlkBoot = Join-Path $PSScriptRoot 'enable-virtio-blk-boot-load.ps1'
+        if (-not (Test-Path -LiteralPath $enableBlkBoot)) {
+            throw "Missing $enableBlkBoot"
+        }
+        & $enableBlkBoot -InfPath $viostorInf
 
-    $enableScsiBoot = Join-Path $PSScriptRoot 'enable-virtio-scsi-boot-load.ps1'
-    if (-not (Test-Path -LiteralPath $enableScsiBoot)) {
-        throw "Missing $enableScsiBoot"
+        $enableScsiBoot = Join-Path $PSScriptRoot 'enable-virtio-scsi-boot-load.ps1'
+        if (-not (Test-Path -LiteralPath $enableScsiBoot)) {
+            throw "Missing $enableScsiBoot"
+        }
+        & $enableScsiBoot -InfPath $vioscsiInf
     }
-    & $enableScsiBoot -InfPath $vioscsiInf
 
     Confirm-BootDrivers -ServiceNames @('viostor', 'vioscsi')
     Sync-VirtioBootRegistryToAllControlSets

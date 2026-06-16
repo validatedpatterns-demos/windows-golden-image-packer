@@ -27,6 +27,9 @@ echo "Staging prep disk for OVMF sysprep: $dest" >&2
 mv -f "$work_disk" "$dest"
 
 echo "Prep checkpoint: offline VirtIO boot registry (must pass before OVMF sysprep)" >&2
+if [[ -x "$ROOT/scripts/fix-virtio-startoverride-offline.sh" ]]; then
+  "$ROOT/scripts/fix-virtio-startoverride-offline.sh" "$dest" >&2
+fi
 if [[ -x "$ROOT/scripts/inspect-golden-qcow2.sh" ]]; then
   INSPECT_VIRTIO_STRICT=1 "$ROOT/scripts/inspect-golden-qcow2.sh" "$dest" >&2
 fi

@@ -91,8 +91,8 @@ tmp_script="$(mktemp)"
 trap 'rm -f "$tmp_hive" "$tmp_script"' EXIT
 
 if ! libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then
-  echo "Could not read SYSTEM hive from $IMAGE (skipping StartOverride offline cleanup)" >&2
-  exit 0
+  echo "ERROR: could not read SYSTEM hive from $IMAGE (StartOverride offline cleanup required)" >&2
+  exit 1
 fi
 
 if ! build_hivexsh_script "$tmp_hive" "$tmp_script"; then

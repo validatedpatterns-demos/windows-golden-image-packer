@@ -52,7 +52,7 @@ packer_ovmf_common_qemu_args() {
     -machine "type=q35,accel=${PACKER_OVMF_ACCEL},smm=on" \
     -boot menu=on,strict=on \
     -drive "if=none,file=${work_dir}/${disk_name},id=disk0,cache=writeback,discard=ignore,format=qcow2" \
-    -device "ide-hd,drive=disk0,bus=ide.0,bootindex=1,write-cache=on" \
+    -device "virtio-blk-pci,drive=disk0,bootindex=1,write-cache=on" \
     -device "${PACKER_OVMF_NET_DEV},netdev=user.0,bootindex=5" \
     -m "${PACKER_OVMF_MEMORY}M" \
     -smp "$PACKER_OVMF_VCPUS" \

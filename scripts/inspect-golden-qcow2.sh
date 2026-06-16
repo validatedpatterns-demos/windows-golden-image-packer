@@ -47,6 +47,7 @@ else
 fi
 
 virtio_rc=0
+bcd_rc=0
 inspect_hive_control_set() {
   local hive="$1"
   local cs="$2"
@@ -141,6 +142,80 @@ elif [[ ! -r "$IMAGE" ]]; then
   echo "VirtIO registry check skipped (image not readable — chown golden qcow2 to your user first)." >&2
 fi
 
+if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strings >/dev/null 2>&1 && command -v hivexsh >/dev/null 2>&1; then
+  tmp_bcd="$(mktemp)"
+  bcd_get_element() {
+    local hive="$1"
+    local key="$2"
+    for value_name in Element "" 0; do
+      if out="$(hivexget "$hive" "$key" "$value_name" 2>/dev/null)"; then
+        printf '%s' "$out"
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  bcd_ok=0
+  if libguestfs_direct guestfish --ro -a "$IMAGE" -i download /EFI/Microsoft/Boot/BCD "$tmp_bcd" 2>/dev/null; then
+    bcd_ok=1
+  else
+    for esp in /dev/sda3 /dev/sda1; do
+      if libguestfs_direct guestfish --ro -a "$IMAGE" run : mount "$esp" / : download /EFI/Microsoft/Boot/BCD "$tmp_bcd" 2>/dev/null; then
+        bcd_ok=1
+        break
+      fi
+    done
+  fi
+  if [[ "$bcd_ok" -eq 1 ]]; then
+    echo ""
+    echo "UEFI BCD boot menu sanity:"
+    windows_server_count="$(strings -el "$tmp_bcd" 2>/dev/null | rg -x "Windows Server" -c || true)"
+    windows_server_count="${windows_server_count:-0}"
+    echo "  Windows Server menu entry strings: ${windows_server_count} (expect 1)"
+    if [[ "$windows_server_count" -gt 1 ]]; then
+      echo "  FAIL: duplicate Windows boot loaders in BCD (boot menu shows two 'Windows Server' entries; winload.efi 0xc000000f risk)" >&2
+      bcd_rc=1
+    fi
+
+    displayorder_raw="$(bcd_get_element "$tmp_bcd" "\\Objects\\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\\Elements\\23000003" || true)"
+    mapfile -t display_guids < <(printf '%s' "$displayorder_raw" | rg -o '\{[0-9a-fA-F-]{36}\}' || true)
+    display_guids_count="${#display_guids[@]}"
+    echo "  bootmgr displayorder GUIDs: ${display_guids_count} (expect 1)"
+
+    display_winload_count=0
+    for guid in "${display_guids[@]}"; do
+      app_path="$(bcd_get_element "$tmp_bcd" "\\Objects\\${guid}\\Elements\\12000002" || true)"
+      if printf '%s' "$app_path" | rg -qi 'winload\.efi'; then
+        display_winload_count=$((display_winload_count + 1))
+      fi
+    done
+    echo "  displayorder winload.efi entries: ${display_winload_count} (expect 1)"
+    if [[ "$display_guids_count" -ne 1 || "$display_winload_count" -ne 1 ]]; then
+      echo "  FAIL: bootmgr displayorder is not a single Windows loader entry (duplicate/invalid boot menu)" >&2
+      bcd_rc=1
+    fi
+
+    mapfile -t bcd_objects < <(printf 'cd Objects\nls\nquit\n' | hivexsh "$tmp_bcd" 2>/dev/null | rg '^\{' || true)
+    bcd_winload_loader_count=0
+    for guid in "${bcd_objects[@]}"; do
+      app_path="$(bcd_get_element "$tmp_bcd" "\\Objects\\${guid}\\Elements\\12000002" || true)"
+      if printf '%s' "$app_path" | rg -qi 'winload\.efi'; then
+        bcd_winload_loader_count=$((bcd_winload_loader_count + 1))
+      fi
+    done
+    echo "  BCD osloader objects (winload.efi): ${bcd_winload_loader_count} (expect 1)"
+    if [[ "$bcd_winload_loader_count" -ne 1 ]]; then
+      echo "  FAIL: BCD store has ${bcd_winload_loader_count} winload osloader objects (orphan loaders -> 0xc000000f/0xc0000001)" >&2
+      bcd_rc=1
+    fi
+  fi
+  rm -f "$tmp_bcd"
+fi
+
 if [[ "${INSPECT_VIRTIO_STRICT:-1}" != 0 && "$virtio_rc" -ne 0 ]]; then
+  exit 1
+fi
+if [[ "${INSPECT_BCD_STRICT:-1}" != 0 && "$bcd_rc" -ne 0 ]]; then
   exit 1
 fi

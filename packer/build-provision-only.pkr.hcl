@@ -64,7 +64,7 @@ source "qemu" "from_install_gpt" {
   iso_url          = var.base_image_path
   iso_checksum     = "none"
   skip_resize_disk = true
-  # Placeholder; gpt_ovmf_qemuargs attaches the disk via ich9-ahci (SATA).
+  # Placeholder; gpt_ovmf_qemuargs attaches the disk as virtio-blk for OpenShift parity.
   disk_interface   = "ide"
   net_device       = var.install_net_device
   machine_type     = "q35"
@@ -147,7 +147,6 @@ build {
     environment_vars = local.provision_env_vars
     scripts = [
       "${path.root}/../scripts/08-convert-mbr-to-uefi.ps1",
-      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
     ]
   }
 
@@ -163,6 +162,7 @@ build {
       "${path.root}/../scripts/06-shrink-disk.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
       "${path.root}/../scripts/schedule-winrm-at-boot.ps1",
+      "${path.root}/../scripts/verify-virtio-boot-drivers-all.ps1",
     ]
   }
 }
@@ -201,7 +201,7 @@ build {
     environment_vars = local.provision_env_vars
     scripts          = [
       "${path.root}/../scripts/verify-virtio-boot-drivers.ps1",
-      "${path.root}/../scripts/07-repair-uefi-boot.ps1",
+      "${path.root}/../scripts/11-prepare-bcd-virtio-boot.ps1",
       "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
       "${path.root}/../scripts/configure-oobe-locale.ps1",
       "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
