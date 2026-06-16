@@ -15,9 +15,27 @@
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
+          <Description>Skip OOBE product key page (generalize clears pre-sysprep SetupDisplayedProductKey)</Description>
+          <Path>reg.exe add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE /v SetupDisplayedProductKey /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+%{if product_key != ""~}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Description>Re-apply product key after sysprep generalize</Description>
+          <Path>cmd.exe /c cscript //nologo %SystemRoot%\System32\slmgr.vbs /ipk ${product_key}</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
           <Description>Extend C: when the VM disk is larger than the golden image</Description>
           <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\GoldenImage\extend-system-partition.ps1</Path>
         </RunSynchronousCommand>
+%{else~}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Description>Extend C: when the VM disk is larger than the golden image</Description>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\GoldenImage\extend-system-partition.ps1</Path>
+        </RunSynchronousCommand>
+%{endif~}
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
@@ -30,10 +48,6 @@
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-${product_key_oobe_xml}
-      <AutoLogon>
-        <Enabled>false</Enabled>
-      </AutoLogon>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>

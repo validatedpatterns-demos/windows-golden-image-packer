@@ -69,6 +69,16 @@ validate_oobe_unattend() {
     return 1
   fi
 
+  if printf '%s\n' "$unattend" | sed -n '/Microsoft-Windows-Shell-Setup/,/<\/component>/p' | grep -q '<ProductKey>'; then
+    echo "FAIL: $label has Shell-Setup ProductKey in oobeSystem (specialize pass only; causes outside-range parse error)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | rg -q '<component[^>]*Microsoft-Windows-Shell-Setup[\s\S]*<!--'; then
+    echo "FAIL: $label has XML comments inside Microsoft-Windows-Shell-Setup (WCM can reject them)." >&2
+    return 1
+  fi
+
   if printf '%s\n' "$unattend" | grep -q '<WillShowUI>'; then
     echo "FAIL: $label contains WillShowUI (windowsPE UserData only; invalid in oobeSystem Shell-Setup)." >&2
     return 1
@@ -88,6 +98,11 @@ validate_oobe_unattend() {
 
   if printf '%s\n' "$unattend" | grep -q '<NetworkLocation>'; then
     echo "FAIL: $label contains deprecated NetworkLocation (OOBE parse error on Server)." >&2
+    return 1
+  fi
+
+  if ! printf '%s\n' "$unattend" | grep -q 'SetupDisplayedProductKey'; then
+    echo "FAIL: $label missing RunSynchronous SetupDisplayedProductKey (OOBE product key page)." >&2
     return 1
   fi
 

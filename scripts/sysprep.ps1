@@ -64,6 +64,37 @@ function Restore-OobeUnattend {
     Write-Host "Restored OOBE-only unattend ($Reason)"
 }
 
+function Set-PostSysprepProductKeyOobe {
+    param(
+        [string]$GeneralizeUnattendPath
+    )
+
+    $oobeReg = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE'
+    if (-not (Test-Path -LiteralPath $oobeReg)) {
+        New-Item -Path $oobeReg -Force | Out-Null
+    }
+    Set-ItemProperty -LiteralPath $oobeReg -Name 'SetupDisplayedProductKey' -Value 1 -Type DWord -Force
+    Write-Host 'Set SetupDisplayedProductKey=1 (skip OOBE product key page after generalize)'
+
+    if (-not (Test-Path -LiteralPath $GeneralizeUnattendPath)) {
+        Write-Warning "Cannot read product key from $GeneralizeUnattendPath"
+        return
+    }
+
+    $genXml = Get-Content -Path $GeneralizeUnattendPath -Raw
+    if ($genXml -match '<ProductKey>([^<]+)</ProductKey>') {
+        $productKey = $Matches[1].Trim()
+        if ($productKey) {
+            $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
+            Write-Host 'Installing product key via slmgr before shutdown...'
+            & cscript.exe //nologo $slmgr /ipk $productKey 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "slmgr /ipk exited $LASTEXITCODE"
+            }
+        }
+    }
+}
+
 function Get-LogTail {
     param([string]$Path, [int]$Lines = 80)
     if (-not (Test-Path $Path)) {
@@ -720,6 +751,7 @@ try {
 
     # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
     Restore-OobeUnattend -Reason 'after sysprep generalize'
+    Set-PostSysprepProductKeyOobe -GeneralizeUnattendPath $generalizeUnattend
 
     $restoreVirtio = Join-Path $PSScriptRoot 'restore-virtio-boot-after-sysprep.ps1'
     if (-not (Test-Path -LiteralPath $restoreVirtio)) {

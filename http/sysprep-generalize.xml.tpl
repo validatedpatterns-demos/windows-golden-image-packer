@@ -14,6 +14,9 @@
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>*</ComputerName>
       <TimeZone>UTC</TimeZone>
+%{if product_key != ""~}
+      <ProductKey>${product_key}</ProductKey>
+%{endif~}
     </component>
   </settings>
   <!-- generalize pass: SkipRearm only. Do not set PersistAllDeviceInstalls here — the sysprep

@@ -195,20 +195,34 @@ elif profile == "sysprep-oobe":
         if needle in raw:
             fail(f"contains forbidden value {needle!r}")
 
+    shell_setup = re.search(
+        r"<component[^>]*Microsoft-Windows-Shell-Setup.*?</component>",
+        raw,
+        re.DOTALL,
+    )
+    if shell_setup and "<!--" in shell_setup.group(0):
+        fail("contains XML comments inside Microsoft-Windows-Shell-Setup")
+
     if "<WillShowUI>" in raw:
         fail("contains WillShowUI (valid in windowsPE UserData only, not oobeSystem Shell-Setup)")
 
-    if re.search(r"<ProductKey>[^<\s]+</ProductKey>", raw):
+    if "pass=\"oobeSystem\"" in raw and re.search(
+        r'<component[^>]*Microsoft-Windows-Shell-Setup[\s\S]*?<ProductKey',
+        raw,
+    ):
         fail(
-            "uses flat ProductKey text (OOBE ignores it; "
-            "use product-key-oobe.xml.tpl nested <Key> block)"
+            "Shell-Setup ProductKey is valid in specialize pass only "
+            "(use RunSynchronous slmgr.vbs /ipk in oobeSystem instead)"
         )
-
-    if "<ProductKey>" in raw and "<Key>" not in raw:
-        fail("ProductKey is missing nested <Key> (product key OOBE prompt)")
 
     if "<Enabled>true</Enabled>" in raw:
         fail("AutoLogon Enabled=true (install autounattend, not sysprep OOBE)")
+
+    if "SetupDisplayedProductKey" not in raw:
+        fail(
+            "missing RunSynchronous reg SetupDisplayedProductKey "
+            "(generalize clears pre-sysprep value; OOBE shows product key page without it)"
+        )
 
     for settings in settings_for("generalize"):
         for forbidden in ("RunSynchronous", "Reseal"):
