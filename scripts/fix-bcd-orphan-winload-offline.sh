@@ -33,7 +33,8 @@ BCD_BOOTMGR='{9dea862c-5cdd-4e70-acc1-f32b344d4795}'
 BCD_BOOTMGR_DEVICE_KEY="\\Objects\\${BCD_BOOTMGR}\\Elements\\11000001"
 BCD_GUEST_PATH='/EFI/Microsoft/Boot/BCD'
 BCD_ELEM_DEVICE='11000001'
-BCD_ELEM_OSDEVICE='11000002'
+BCD_ELEM_OSDEVICE='21000001'
+BCD_ELEM_WRONG_OSDEVICE='11000002'
 BCD_ELEM_APPLICATION='12000002'
 BCD_PARTITION_DEVICE_TYPE='06000000'
 
@@ -149,27 +150,43 @@ build_windows_partition_device_hex() {
 loader_device_needs_repair() {
   local hive="$1"
   local guid="$2"
-  local key="\\Objects\\${guid}\\Elements\\${BCD_ELEM_DEVICE}"
-  local raw devtype part_hex
+  local elem key raw devtype part_hex
 
-  if ! raw="$(bcd_element_raw_hex "$hive" "$key" 2>/dev/null)"; then
-    return 0
-  fi
-  if [[ ${#raw} -lt 96 ]]; then
-    return 0
-  fi
-  devtype="${raw:32:8}"
-  part_hex="${raw:64:32}"
-  if [[ "$devtype" != "$BCD_PARTITION_DEVICE_TYPE" ]]; then
-    return 0
-  fi
-  if [[ "$part_hex" == '00000000000000000000000000000000' ]]; then
-    return 0
-  fi
-  if ! bcd_element_present "$hive" "\\Objects\\${guid}\\Elements\\${BCD_ELEM_OSDEVICE}"; then
-    return 0
-  fi
+  for elem in "$BCD_ELEM_DEVICE" "$BCD_ELEM_OSDEVICE"; do
+    key="\\Objects\\${guid}\\Elements\\${elem}"
+    if ! raw="$(bcd_element_raw_hex "$hive" "$key" 2>/dev/null)"; then
+      return 0
+    fi
+    if [[ ${#raw} -lt 96 ]]; then
+      return 0
+    fi
+    devtype="${raw:32:8}"
+    part_hex="${raw:64:32}"
+    if [[ "$devtype" != "$BCD_PARTITION_DEVICE_TYPE" ]]; then
+      return 0
+    fi
+    if [[ "$part_hex" == '00000000000000000000000000000000' ]]; then
+      return 0
+    fi
+  done
   return 1
+}
+
+append_delete_wrong_osdevice_element() {
+  local script="$1"
+  local hive="$2"
+  local guid="$3"
+  local key="\\Objects\\${guid}\\Elements\\${BCD_ELEM_WRONG_OSDEVICE}"
+
+  if ! bcd_element_present "$hive" "$key"; then
+    return 1
+  fi
+  {
+    echo "cd ${key}"
+    echo "del"
+  } >>"$script"
+  echo "Offline BCD cleanup: remove non-osdevice element ${BCD_ELEM_WRONG_OSDEVICE} on loader ${guid}" >&2
+  return 0
 }
 
 append_set_partition_device_element() {
@@ -292,6 +309,9 @@ for guid in "${keep_guids[@]}"; do
   fi
   if loader_device_needs_repair "$tmp_bcd" "$guid"; then
     append_repair_loader_partition_devices "$tmp_script" "$tmp_bcd" "$guid" "$windows_guid"
+    modified=1
+  fi
+  if append_delete_wrong_osdevice_element "$tmp_script" "$tmp_bcd" "$guid"; then
     modified=1
   fi
 done

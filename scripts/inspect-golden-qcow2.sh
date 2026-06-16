@@ -212,11 +212,11 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strin
         continue
       fi
       device_key="\\Objects\\${guid}\\Elements\\11000001"
-      osdevice_key="\\Objects\\${guid}\\Elements\\11000002"
+      osdevice_key="\\Objects\\${guid}\\Elements\\21000001"
       if bcd_get_element "$tmp_bcd" "$osdevice_key" >/dev/null 2>&1; then
         loader_osdevice_ok=1
       else
-        echo "  FAIL: winload loader ${guid} missing osdevice element (0xc000000f risk)" >&2
+        echo "  FAIL: winload loader ${guid} missing osdevice element 21000001 (0xc000000f/registry risk)" >&2
         bcd_rc=1
       fi
       if device_raw="$(hivexget "$tmp_bcd" "$device_key" Element 2>/dev/null | xxd -p | tr -d '\n')"; then
@@ -225,12 +225,21 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strin
         if [[ "$devtype" == '06000000' && "$part_hex" != '00000000000000000000000000000000' ]]; then
           loader_partition_device_ok=1
         else
-          echo "  FAIL: winload loader ${guid} device is not GPT partition type 0x06 with partition GUID (0xc000000f risk)" >&2
+          echo "  FAIL: winload loader ${guid} device 11000001 is not GPT partition type 0x06 with partition GUID (0xc000000f risk)" >&2
           bcd_rc=1
         fi
       else
-        echo "  FAIL: winload loader ${guid} missing device element (0xc000000f risk)" >&2
+        echo "  FAIL: winload loader ${guid} missing device element 11000001 (0xc000000f risk)" >&2
         bcd_rc=1
+      fi
+      if osdevice_raw="$(hivexget "$tmp_bcd" "$osdevice_key" Element 2>/dev/null | xxd -p | tr -d '\n')"; then
+        osdevtype="${osdevice_raw:32:8}"
+        ospart_hex="${osdevice_raw:64:32}"
+        if [[ "$osdevtype" != '06000000' || "$ospart_hex" == '00000000000000000000000000000000' ]]; then
+          echo "  FAIL: winload loader ${guid} osdevice 21000001 is not GPT partition type 0x06 with partition GUID (registry load risk)" >&2
+          bcd_rc=1
+          loader_osdevice_ok=0
+        fi
       fi
     done
     if [[ "$display_winload_count" -eq 1 && "$loader_osdevice_ok" -eq 1 ]]; then
