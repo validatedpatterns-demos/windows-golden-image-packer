@@ -49,9 +49,9 @@ WORK_DIR="$STAGING/work"
 mkdir -p "$WORK_DIR"
 
 BUILD_SCHEDULE_LOG="${BUILD_SCHEDULE_LOG:-$STAGING/build-schedule.log}"
-BUILD_SCHEDULE_LOG="$BUILD_SCHEDULE_LOG" "$ROOT/scripts/print-build-schedule.sh" provision-gpt-sysprep
+BUILD_SCHEDULE_LOG="$BUILD_SCHEDULE_LOG" "$ROOT/scripts/print-build-schedule.sh" provision-gpt
 echo ""
-echo "=== OVMF sysprep (GPT disk, BCD generalize requires UEFI firmware) ==="
+echo "=== Packer provision + sysprep (OVMF, virtio-blk) ==="
 echo "  Prep disk: $BASE_IMAGE"
 echo "  Packer work directory: $WORK_DIR"
 echo "  While the VM runs: ./scripts/show-packer-console.sh  (VNC port + work path)"
@@ -74,7 +74,7 @@ packer_args=(
   "-var=windows_edition=${WINDOWS_EDITION}"
   "-var=base_image_path=${BASE_IMAGE}"
   "-var=output_directory=${WORK_DIR}"
-  -only=windows-golden-provision-gpt-sysprep.qemu.from_install_gpt
+  -only=windows-golden-provision.qemu.from_install_gpt
   .
 )
 "$PACKER_BIN" "${packer_args[@]}"

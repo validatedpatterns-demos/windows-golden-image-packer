@@ -15,6 +15,6 @@ for f in enable-winrm.ps1 enable-winrm.cmd enable-winrm-locator.cmd; do
   cp "$ROOT/http/$f" "$DEST/"
 done
 
-for f in clear-autologon.ps1; do
+for f in clear-autologon.ps1 post-install.ps1; do
   cp "$ROOT/scripts/$f" "$DEST/"
 done

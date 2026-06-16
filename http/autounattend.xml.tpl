@@ -104,6 +104,7 @@ ${product_key_xml}
 %{endif~}
     </component>
 ${specialize_virtio_xml}
+${specialize_post_install_xml}
 ${specialize_winrm_xml}
   </settings>
   <settings pass="oobeSystem">

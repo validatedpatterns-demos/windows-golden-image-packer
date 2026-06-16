@@ -1,0 +1,53 @@
+---
+# Verify Windows generalize completed by checking Sysprep_succeeded.tag over WinRM.
+#
+# IMPORTANT: Only works BEFORE sysprep /generalize. Generalize breaks new WinRM logins
+# (NTLM/401) even with the correct admin_password; sysprep.ps1 keeps using Packer's
+# existing session. After sysprep, use scripts/verify-sysprep-succeeded-offline.sh on
+# the stopped work qcow2, or check via VNC (Administrator + admin_password from build.pkrvars.hcl).
+#
+# Prerequisites:
+#   ansible-galaxy collection install -r ansible/requirements.yml
+#   Guest WinRM on :5985 reachable (Packer hostfwd to localhost)
+#
+# Quick run (running Packer provision VM):
+#   export WINRM_PASSWORD='your-admin-password'
+#   scripts/verify-sysprep-via-ansible.sh
+#
+# Manual run:
+#   export WINRM_PASSWORD='your-admin-password'
+#   ansible-playbook -i ansible/inventory/packer-vm.yml \
+#     ansible/playbooks/verify-sysprep-succeeded.yml
+
+- name: Verify sysprep succeeded on Windows guest
+  hosts: all
+  gather_facts: false
+
+  vars:
+    sysprep_tag_path: C:\Windows\System32\Sysprep\Sysprep_succeeded.tag
+    # Packer uses winrm_use_ssl=false (HTTP on guest :5985, hostfwd to localhost).
+    ansible_winrm_scheme: http
+    ansible_winrm_message_encryption: always
+
+  tasks:
+    - name: Check Sysprep_succeeded.tag exists
+      ansible.windows.win_stat:
+        path: "{{ sysprep_tag_path }}"
+      register: sysprep_tag
+
+    - name: Report sysprep status
+      ansible.builtin.debug:
+        msg: >-
+          {{ sysprep_tag_path }}
+          {{ 'exists' if sysprep_tag.stat.exists else 'MISSING' }}
+          {%- if sysprep_tag.stat.exists %}
+          (size={{ sysprep_tag.stat.size }} bytes,
+          modified={{ sysprep_tag.stat.lastwritetime | default('unknown') }})
+          {%- endif %}
+
+    - name: Fail when sysprep did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          Sysprep_succeeded.tag not found at {{ sysprep_tag_path }}.
+          Generalize did not complete or the guest was rebooted past OOBE without the tag.
+      when: not sysprep_tag.stat.exists

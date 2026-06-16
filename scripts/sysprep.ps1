@@ -13,6 +13,7 @@ if (-not $ProvisionerRun -and $env:SYSPREP_PROVISIONER_RUN -eq '1') {
 }
 
 $goldenData = 'C:\ProgramData\GoldenImage'
+$shutdownGuardPidFile = Join-Path $goldenData 'sysprep-shutdown-guard.pid'
 $generalizeUnattend = 'C:\Windows\Temp\sysprep-generalize.xml'
 $oobeUnattend = 'C:\Windows\Temp\sysprep-oobe.xml'
 $oobeUnattendPersistent = Join-Path $goldenData 'sysprep-oobe.xml'
@@ -229,6 +230,18 @@ function Wait-SysprepWithProgress {
 
 function Stop-OrphanSysprepShutdownGuards {
     # If Stop-SysprepShutdownGuard failed, the guard loops shutdown /a and blocks Invoke-GuestShutdown.
+    if (Test-Path -LiteralPath $shutdownGuardPidFile) {
+        $guardPid = Get-Content -LiteralPath $shutdownGuardPidFile -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -match '^\d+$' } |
+            Select-Object -First 1
+        if ($guardPid) {
+            Write-Host "Stopping sysprep shutdown guard from pid file (pid $guardPid)"
+            Stop-Process -Id ([int]$guardPid) -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $shutdownGuardPidFile -Force -ErrorAction SilentlyContinue
+    }
+
     Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*sysprep-shutdown-guard.ps1*' } |
         ForEach-Object {
@@ -241,26 +254,29 @@ function Invoke-GuestShutdown {
     $shutdownExe = "$env:SystemRoot\System32\shutdown.exe"
     Write-Host 'Forcing guest shutdown for Packer (sysprep runs without /shutdown so OOBE unattend can be restored first).'
 
-    for ($attempt = 1; $attempt -le 6; $attempt++) {
+    Stop-OrphanSysprepShutdownGuards
+    Cancel-PendingGuestShutdown
+    Start-Sleep -Seconds 1
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
         Stop-OrphanSysprepShutdownGuards
         Cancel-PendingGuestShutdown
         Start-Sleep -Milliseconds 400
 
-        Write-Host "Guest shutdown attempt $attempt/6..."
-        & $shutdownExe /s /t 3 /f
+        Write-Host "Guest shutdown attempt $attempt/3..."
+        & $shutdownExe /s /t 0 /f
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "shutdown.exe exit $LASTEXITCODE on attempt $attempt"
         }
 
-        Start-Sleep -Seconds 4
+        Start-Sleep -Seconds 5
         Stop-OrphanSysprepShutdownGuards
     }
 
-    # Do not Stop-Computer here: it can end the WinRM session before shutdown.exe wins a race
-    # with a lingering sysprep shutdown guard (guest stays at login; host waits 30m for QEMU).
-    Write-Host 'Shutdown requested; waiting 45s before closing WinRM so the guest can power off.'
-    Start-Sleep -Seconds 45
-    Write-Host 'Host wait-packer-qemu-exit.sh waits for QEMU to exit.'
+    Stop-OrphanSysprepShutdownGuards
+    Cancel-PendingGuestShutdown
+    Write-Host 'Using Stop-Computer -Force (login screen can ignore shutdown.exe while WinRM is still up).'
+    Stop-Computer -Force
 }
 
 function Remove-PhantomVirtioBootDevices {
@@ -309,20 +325,25 @@ while ($true) {
     Start-Sleep -Milliseconds 400
 }
 '@ | Set-Content -LiteralPath $guardScript -Encoding UTF8
-    return Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    New-Item -ItemType Directory -Path $goldenData -Force | Out-Null
+    $guard = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $guardScript) `
         -PassThru -WindowStyle Hidden
+    Set-Content -LiteralPath $shutdownGuardPidFile -Value $guard.Id -Encoding ASCII
+    return $guard
 }
 
 function Stop-SysprepShutdownGuard {
     param($GuardProcess)
-    if (-not $GuardProcess) { return }
-    try {
-        Stop-Process -Id $GuardProcess.Id -Force -ErrorAction SilentlyContinue
+    if ($GuardProcess) {
+        try {
+            Stop-Process -Id $GuardProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Warning "Could not stop sysprep shutdown guard: $($_.Exception.Message)"
+        }
     }
-    catch {
-        Write-Warning "Could not stop sysprep shutdown guard: $($_.Exception.Message)"
-    }
+    Stop-OrphanSysprepShutdownGuards
 }
 
 function Stage-VirtioDriversForSysprep {
@@ -417,6 +438,26 @@ function Get-EspBcdDeviceSpec {
     throw 'ESP has no GPT GUID or drive letter for BCD repair'
 }
 
+function Get-WindowsPartitionBcdDeviceSpec {
+    $windows = Get-Partition -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.GptType -eq '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -or
+            ($_.Type -eq 'Basic' -and $_.GptType -ne '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}')
+        } |
+        Sort-Object -Property Size -Descending |
+        Select-Object -First 1
+    if (-not $windows) {
+        throw 'Windows data partition not found for BCD loader repair'
+    }
+    if ($windows.Guid) {
+        return "partition={$($windows.Guid)}"
+    }
+    if ($windows.DriveLetter) {
+        return "partition=$($windows.DriveLetter):"
+    }
+    throw 'Windows partition has no GPT GUID or drive letter for BCD repair'
+}
+
 function Get-BcdObjectIds {
     param(
         [string[]]$BcdeditArgs
@@ -444,27 +485,52 @@ function Invoke-BcdeditSilently {
     $global:LASTEXITCODE = 0
 }
 
-function Remove-AllBcdOsLoaders {
-    foreach ($id in @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))) {
-        Write-Host "Removing stale BCD osloader entry $id before bcdboot rebuild"
+function Get-BcdWinloadObjectIds {
+    $out = & bcdedit.exe /enum all 2>&1 | Out-String
+    $ids = @()
+    $currentId = $null
+    foreach ($line in ($out -split "`r?`n")) {
+        if ($line -match 'identifier\s+(\{[0-9a-f-]{36}\})') {
+            $currentId = $Matches[1]
+            continue
+        }
+        if ($currentId -and $line -match 'path\s+.*winload\.efi') {
+            $ids += $currentId
+            $currentId = $null
+        }
+    }
+    return @($ids | Select-Object -Unique)
+}
+
+function Remove-AllBcdWinloadObjects {
+    param(
+        [string[]]$KeepIds = @()
+    )
+
+    foreach ($id in @(Get-BcdWinloadObjectIds)) {
+        if ($KeepIds -contains $id) {
+            continue
+        }
+        Write-Host "Removing BCD winload object $id"
         Invoke-BcdeditSilently -BcdeditArgs @('/delete', $id, '/f')
     }
 }
 
-function Remove-DuplicateBcdOsLoaders {
-    $defaultEnum = & bcdedit.exe /enum '{default}' /v 2>&1 | Out-String
-    $keepId = '{default}'
-    if ($defaultEnum -match '(\{[0-9a-f-]{36}\})') {
-        $keepId = $Matches[1]
-    }
+function Remove-AllBcdOsLoaders {
+    Remove-AllBcdWinloadObjects
+}
 
-    foreach ($id in @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))) {
-        if ($id -eq $keepId) {
-            continue
-        }
-        Write-Host "Removing duplicate BCD osloader entry $id (keeping $keepId)"
-        Invoke-BcdeditSilently -BcdeditArgs @('/delete', $id, '/f')
+function Resolve-BcdDefaultLoaderId {
+    $out = & bcdedit.exe /enum '{default}' /v 2>&1 | Out-String
+    if ($out -match 'identifier\s+(\{[0-9a-f-]{36}\})') {
+        return $Matches[1]
     }
+    return '{default}'
+}
+
+function Remove-DuplicateBcdOsLoaders {
+    $keepId = Resolve-BcdDefaultLoaderId
+    Remove-AllBcdWinloadObjects -KeepIds @($keepId)
 }
 
 function Clear-BcdDiskLocateElements {
@@ -485,38 +551,54 @@ function Reset-BcdBootMenu {
 }
 
 function Test-BcdSingleOsLoader {
-    $loaderIds = @(Get-BcdObjectIds -BcdeditArgs @('/enum', 'osloader'))
+    $loaderIds = @(Get-BcdWinloadObjectIds)
     if ($loaderIds.Count -ne 1) {
-        throw "BCD repair left $($loaderIds.Count) osloader entries (expected 1): $($loaderIds -join ', ')"
+        throw "BCD repair left $($loaderIds.Count) winload objects (expected 1): $($loaderIds -join ', ')"
     }
-    Write-Host "BCD osloader count OK: $($loaderIds[0])"
+    Write-Host "BCD winload object count OK: $($loaderIds[0])"
+}
+
+function Test-BcdLoaderBootDevices {
+    param([string]$LoaderId)
+
+    $out = & bcdedit.exe /enum $LoaderId /v 2>&1 | Out-String
+    if ($out -notmatch '(?m)^device\s+.*\bpartition=') {
+        throw "BCD loader $LoaderId is missing device partition= (0xc000000f risk)"
+    }
+    if ($out -notmatch '(?m)^osdevice\s+.*\bpartition=') {
+        throw "BCD loader $LoaderId is missing osdevice partition= (0xc000000f risk)"
+    }
+    Write-Host "BCD loader boot devices OK: $LoaderId (device + osdevice partition=)"
 }
 
 function Repair-GeneralizedBcdStore {
     # OVMF sysprep boots virtio-blk (OpenShift parity). Rebuild BCD once after generalize:
-    # delete stale osloaders, bcdboot, point bootmgr at ESP, default/current at boot device.
+    # fresh bcdboot on ESP, point bootmgr at ESP, loader at Windows partition GUID (not device boot).
     $espSpec = Get-EspBcdDeviceSpec
+    $windowsSpec = Get-WindowsPartitionBcdDeviceSpec
 
-    Remove-AllBcdOsLoaders
+    Remove-AllBcdWinloadObjects
 
     $uefiRepair = Join-Path $PSScriptRoot '07-repair-uefi-boot.ps1'
     if (-not (Test-Path -LiteralPath $uefiRepair)) {
         throw "Missing $uefiRepair"
     }
-    & $uefiRepair
+    & $uefiRepair -CleanBcdStore
 
     Remove-DuplicateBcdOsLoaders
 
-    Write-Host "Repairing generalized BCD for virtio-blk deploy (bootmgr=$espSpec, default/current=device boot)"
+    $loaderId = Resolve-BcdDefaultLoaderId
+    Write-Host "Repairing generalized BCD for virtio-blk deploy (loader=$loaderId, bootmgr=$espSpec, device/osdevice=$windowsSpec)"
     & bcdedit.exe /set '{bootmgr}' device $espSpec 2>&1 | Out-Host
-    foreach ($id in @('{default}', '{current}')) {
-        & bcdedit.exe /set $id device boot 2>&1 | Out-Host
-        & bcdedit.exe /set $id osdevice boot 2>&1 | Out-Host
+    foreach ($id in @($loaderId, '{default}', '{current}')) {
+        & bcdedit.exe /set $id device $windowsSpec 2>&1 | Out-Host
+        & bcdedit.exe /set $id osdevice $windowsSpec 2>&1 | Out-Host
     }
-    Clear-BcdDiskLocateElements -ObjectIds @('{default}', '{current}')
-    Reset-BcdBootMenu
+    Clear-BcdDiskLocateElements -ObjectIds @($loaderId, '{default}', '{current}')
+    Invoke-BcdeditSilently -BcdeditArgs @('/displayorder', $loaderId)
     Remove-DuplicateBcdOsLoaders
     Test-BcdSingleOsLoader
+    Test-BcdLoaderBootDevices -LoaderId $loaderId
     $global:LASTEXITCODE = 0
 }
 
@@ -645,9 +727,6 @@ try {
     }
     & $restoreVirtio
 
-    # bcdboot + BCD repair (includes single 07-repair-uefi-boot.ps1 bcdboot pass).
-    Repair-GeneralizedBcdStore
-
     # Generalize can clone a control set without VirtIO keys; re-sync every numbered hive.
     if (-not (Get-Command Sync-VirtioBootRegistryToAllControlSets -ErrorAction SilentlyContinue)) {
         . $installVirtio -SkipMain
@@ -666,9 +745,13 @@ try {
     # Windows may rewrite StartOverride during shutdown when the build VM last booted SATA/IDE.
     Remove-VirtioBootStartOverrideAllControlSets
 
+    # Rebuild BCD last: bcdboot can leave orphan winload objects until host-side offline cleanup.
+    Repair-GeneralizedBcdStore
+
     $global:LASTEXITCODE = 0
     # Generalize breaks WinRM before Packer shutdown; power off locally. OVMF builds use
     # wait-packer-qemu-exit.sh on the host so Packer skips WinRM shutdown_command.
+    Stop-OrphanSysprepShutdownGuards
     Invoke-GuestShutdown
     exit 0
 }

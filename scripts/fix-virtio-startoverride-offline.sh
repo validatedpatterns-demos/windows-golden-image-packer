@@ -10,6 +10,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/libvirt-vm-disk.sh
 source "$ROOT/scripts/libvirt-vm-disk.sh"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" || ! -f "$IMAGE" ]]; then
@@ -86,8 +88,8 @@ guestfish_upload_system_hive() {
     : upload "$local_hive" /Windows/System32/config/SYSTEM
 }
 
-tmp_hive="$(mktemp)"
-tmp_script="$(mktemp)"
+tmp_hive="$(build_mktemp system.XXXXXX)"
+tmp_script="$(build_mktemp hivexsh.XXXXXX)"
 trap 'rm -f "$tmp_hive" "$tmp_script"' EXIT
 
 if ! libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then

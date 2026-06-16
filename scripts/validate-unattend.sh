@@ -7,6 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 PACKER_DIR="$ROOT/packer"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 VALIDATE_VAR_FILE="${VALIDATE_VAR_FILE:-$ROOT/packer/ci.pkrvars.hcl}"
@@ -82,7 +84,7 @@ ${local_expr}
 EOF
 }
 
-tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/validate-unattend.XXXXXX")"
+tmpdir="$(build_mktemp_dir validate-unattend.XXXXXX)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 render_to_file() {

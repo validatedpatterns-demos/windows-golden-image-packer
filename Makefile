@@ -19,11 +19,9 @@ PUSH_QUAY         ?= 0
 GOLDEN_QCOW2      ?=
 
 # Run from packer/ on "." so variables.pkr.hcl + locals.pkr.hcl load; -only must be the full build id (packer 1.11+).
-PACKER_ONLY_GOLDEN          := -only=windows-golden-image.qemu.windows
-PACKER_ONLY_INSTALL         := -only=windows-install-only.qemu.install
-PACKER_ONLY_PROVISION_MBR   := -only=windows-golden-provision-mbr.qemu.from_install_mbr
-PACKER_ONLY_PROVISION_GPT   := -only=windows-golden-provision-gpt.qemu.from_install_gpt
-PACKER_ONLY_PROVISION_GPT_SYSPREP := -only=windows-golden-provision-gpt-sysprep.qemu.from_install_gpt
+PACKER_ONLY_GOLDEN             := -only=windows-golden-image.qemu.windows
+PACKER_ONLY_PROVISION          := -only=windows-golden-provision.qemu.from_install_gpt
+PACKER_ONLY_INSTALL            := -only=windows-install-only.qemu.install
 
 # Packer deletes output_directory at the start of each build (-force) and on failure/cancel
 # (default -on-error=cleanup). Per-version staging keeps install media separate from packer work/.
@@ -38,11 +36,10 @@ help:
 	@echo "Targets:"
 	@echo "  init            Install Packer plugins"
 	@echo "  validate        Validate Packer templates and unattend answer files"
-	@echo "  build                  Build $(BUILD_VERSIONS) sequentially (install + provision + sysprep)"
+	@echo "  build                  Build $(BUILD_VERSIONS) sequentially (virt-install + provision)"
 	@echo "  build-version          Build one version: make build-version VERSION=2025"
 	@echo "  build-install          Pass 1 only: make build-install VERSION=2025"
-	@echo "  build-provision-only   Pass 2 only: BASE_IMAGE=path/to.qcow2 (not under work/)"
-	@echo "  build-provision-sysprep-only  OVMF sysprep only (GPT prep disk outside work/)"
+	@echo "  build-provision-only   Pass 2 only: BASE_IMAGE=path/to-install.qcow2 (not under work/)"
 	@echo "  recover-provision      Diagnose failed build; EXECUTE=1 retries provision safely"
 	@echo "  build-2022             Build Windows Server 2022 only"
 	@echo "  build-2025             Build Windows Server 2025 only"
@@ -117,7 +114,7 @@ build-version-bios:
 		$(PACKER_ONLY_GOLDEN) .
 	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
-# UEFI: virt-install install, then Packer provision + sysprep (OpenShift-ready)
+# UEFI: virt-install (virtio-blk) + single Packer provision/sysprep pass
 build-version-uefi:
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025" >&2; exit 1)
 	@command -v virt-install >/dev/null || (echo "virt-install required for efi_boot=true (dnf install virt-install)" >&2; exit 1)
@@ -152,21 +149,16 @@ build-version-uefi:
 	  exit 1; \
 	fi; \
 	echo ""; \
-	echo "=== Phase 2/3: Packer provision prep (SeaBIOS, mbr2gpt, VirtIO, shrink — no sysprep) ==="; \
+	echo "=== Phase 2/2: Packer provision + sysprep (OVMF, virtio-blk) ==="; \
 	echo "  Install disk: $$install"; \
 	echo ""; \
 	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var base_image_path=$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
-		$(PACKER_ONLY_PROVISION_MBR) .; \
+		$(PACKER_ONLY_PROVISION) .; \
 	cd $(CURDIR); \
-	prep_disk="$$(./scripts/stage-provision-prep-disk.sh "$$staging" "$(VERSION)" "$$edition_lc")"; \
-	echo ""; \
-	echo "=== Phase 3/3: OVMF sysprep (BCD generalize requires UEFI firmware) ==="; \
-	echo "  Prep disk: $$prep_disk"; \
-	echo ""; \
-	./scripts/run-packer-provision-sysprep.sh "$$prep_disk" "$$staging" "$(VERSION)"
+	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
 
 build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)
@@ -179,7 +171,7 @@ build-install: stage-virtio init
 		$(PACKER_ONLY_INSTALL) .
 
 build-provision-only: stage-virtio init
-	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=path/to.qcow2 (install image or recovery/salvage copy; not under work/)" >&2; exit 1)
+	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=path/to-install.qcow2 (not under work/)" >&2; exit 1)
 	@test -f "$(abspath $(BASE_IMAGE))" || (echo "BASE_IMAGE not found: $(BASE_IMAGE)" >&2; exit 1)
 	@base="$(abspath $(BASE_IMAGE))"; \
 	case "$$base" in \
@@ -195,55 +187,22 @@ build-provision-only: stage-virtio init
 	if [ -z "$$version" ]; then \
 	  version="$$(echo "$$base" | sed -n 's|.*/\.packer-\([0-9][0-9][0-9][0-9]\)/.*|\1|p')"; \
 	fi; \
-	. ./scripts/libvirt-vm-disk.sh; \
-	prov_target=mbr; \
-	if [ "$(BASE_IMAGE_IS_GPT)" = "1" ]; then prov_target=gpt; \
-	elif command -v virt-filesystems >/dev/null 2>&1 && golden_image_has_efi_partition "$$base"; then prov_target=gpt; \
-	fi; \
-	if [ "$$prov_target" = gpt ]; then \
-	  if [ "$(PROVISION_FULL)" = "1" ]; then \
-	    echo "Provision firmware: OVMF/q35 full provision (PROVISION_FULL=1)"; \
-	    only="$(PACKER_ONLY_PROVISION_GPT)"; \
-	    schedule_profile=provision-gpt; \
-	    BUILD_SCHEDULE_LOG="$$staging_dir/build-schedule.log" ./scripts/print-build-schedule.sh "$$schedule_profile"; \
-	    echo ""; \
-	    prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
-	    if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
-	    cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
-	      -var windows_edition=$(WINDOWS_EDITION) \
-	      $$prov_args \
-	      $$only .; \
-	  else \
-	    echo "Provision mode: OVMF sysprep only (GPT prep disk; set PROVISION_FULL=1 to re-run all provisioners)"; \
-	    ./scripts/run-packer-provision-sysprep.sh "$$base" "$$staging_dir" "$$version"; \
-	  fi; \
-	else \
-	  echo "Provision firmware: SeaBIOS/pc (MBR install disk) + chained OVMF sysprep"; \
-	  only="$(PACKER_ONLY_PROVISION_MBR)"; \
-	  schedule_profile=provision-mbr; \
-	  BUILD_SCHEDULE_LOG="$$staging_dir/build-schedule.log" ./scripts/print-build-schedule.sh "$$schedule_profile"; \
-	  echo ""; \
-	  prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
-	  if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
-	  cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
-	    -var windows_edition=$(WINDOWS_EDITION) \
-	    $$prov_args \
-	    $$only .; \
-	  cd $(CURDIR); \
-	  edition_lc="$$(echo '$(WINDOWS_EDITION)' | tr '[:upper:]' '[:lower:]')"; \
-	  prep_disk="$$(./scripts/stage-provision-prep-disk.sh "$$staging_dir" "$$version" "$$edition_lc")"; \
-	  ./scripts/run-packer-provision-sysprep.sh "$$prep_disk" "$$staging_dir" "$$version"; \
+	BUILD_SCHEDULE_LOG="$$staging_dir/build-schedule.log" ./scripts/print-build-schedule.sh provision-gpt; \
+	echo ""; \
+	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
+	if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
+	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
+	  -var windows_edition=$(WINDOWS_EDITION) \
+	  $$prov_args \
+	  $(PACKER_ONLY_PROVISION) .; \
+	cd $(CURDIR); \
+	if [ -n "$$version" ]; then \
+	  staging_name="$$(basename "$$staging_dir")"; \
+	  ./scripts/promote-golden-output.sh "$$version" "$$staging_name"; \
 	fi
 
-build-provision-sysprep-only: stage-virtio init
-	@test -n "$(BASE_IMAGE)" || (echo "Set BASE_IMAGE=path/to GPT prep qcow2 (outside work/)" >&2; exit 1)
-	@base="$(abspath $(BASE_IMAGE))"; \
-	staging_dir="$$(dirname "$$base")"; \
-	version="$(VERSION)"; \
-	if [ -z "$$version" ]; then \
-	  version="$$(echo "$$base" | sed -n 's|.*/\.packer-\([0-9][0-9][0-9][0-9]\)/.*|\1|p')"; \
-	fi; \
-	./scripts/run-packer-provision-sysprep.sh "$$base" "$$staging_dir" "$$version"
+# Alias for older docs/scripts (same as build-provision-only on virtio install disks).
+build-provision-sysprep-only: build-provision-only
 
 recover-provision: stage-virtio init
 	./scripts/recover-provision.sh $(if $(EXECUTE),--execute,)

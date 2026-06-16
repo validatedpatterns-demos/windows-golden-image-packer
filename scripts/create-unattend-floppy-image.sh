@@ -7,6 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 <autounattend.xml> <output.img>" >&2
@@ -53,7 +55,7 @@ mformat -i "$OUT_IMG" -f 2880 -v UNATTEND ::
 mcopy -oi "$OUT_IMG" "$AUTOUNATTEND" ::autounattend.xml
 mcopy -oi "$OUT_IMG" "$AUTOUNATTEND" ::unattend.xml
 
-STAGE="$(mktemp -d)"
+STAGE="$(build_mktemp_dir unattend-floppy.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 "$ROOT/scripts/stage-unattend-media-files.sh" "$STAGE"
 for f in "$STAGE"/*; do

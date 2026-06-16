@@ -18,9 +18,10 @@ windows_iso_path_2025 = "/path/to/windows-server-2025.iso"
 
 virtio_win_iso_path = "/path/to/virtio-win.iso"
 
-# virt-install install disk (libvirt SATA/AHCI). Packer provision uses provision_disk_interface (ide).
-install_disk_interface = "sata"
+# virt-install: virtio-blk root + OVMF (Tekton windows-efi-installer aligned).
+install_disk_interface = "virtio"
 install_net_device     = "e1000"
+install_firmware       = "uefi"
 
 admin_password = "ChangeMe-Use-A-Strong-Password!"
 
@@ -40,12 +41,11 @@ vm_memory        = 8192
 disk_size        = "40G"
 headless         = false
 
-# true (default): UEFI install via virt-install, then Packer provision + sysprep (OpenShift/CNV).
-# false: one-shot SeaBIOS Packer build — do not deploy those disks to UEFI VMs.
+# true (default): virtio-blk UEFI install via virt-install, then Packer provision + sysprep.
 efi_boot = true
 
-# virt-install Setup firmware: seabios (default) boots Microsoft UDF DVD; uefi often BdsDxe timeouts on QEMU 10.
-# install_firmware = "seabios"
+# virt-install Setup firmware: uefi (default) with virtio root disk.
+# install_firmware = "uefi"
 
 # Emulated TPM 2.0 (swtpm) on UEFI builds; disable only for hosts without swtpm.
 vtpm = true

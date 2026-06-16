@@ -3,6 +3,10 @@
 
 # Refresh UEFI boot files on the ESP and confirm VirtIO storage drivers are boot-start.
 # Run after virtio driver install and before sysprep so virtio + UEFI boots on KubeVirt/libvirt.
+param(
+    [switch]$CleanBcdStore
+)
+
 $ErrorActionPreference = 'Stop'
 
 Import-Module Storage -ErrorAction SilentlyContinue
@@ -74,8 +78,16 @@ catch {
 $efiRoot = Get-EfiMountPath -Partition $esp
 $windowsRoot = $env:SystemRoot
 
-Write-Host "Repairing UEFI boot store: bcdboot $windowsRoot /s $efiRoot /f UEFI"
-& bcdboot.exe $windowsRoot /s $efiRoot /f UEFI | Out-Host
+Write-Host "Repairing UEFI boot store: bcdboot $windowsRoot /s $efiRoot /f UEFI$(if ($CleanBcdStore) { ' (fresh ESP BCD)' })"
+if ($CleanBcdStore) {
+    $bcdOnEsp = Join-Path $efiRoot 'EFI\Microsoft\Boot\BCD'
+    if (Test-Path -LiteralPath $bcdOnEsp) {
+        Write-Host "Removing stale ESP BCD before bcdboot: $bcdOnEsp"
+        Remove-Item -LiteralPath $bcdOnEsp -Force
+    }
+}
+$bcdbootArgs = @($windowsRoot, '/s', $efiRoot, '/f', 'UEFI')
+& bcdboot.exe @bcdbootArgs | Out-Host
 if ($LASTEXITCODE -ne 0) {
     throw "bcdboot failed with exit code $LASTEXITCODE"
 }

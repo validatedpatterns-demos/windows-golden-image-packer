@@ -159,8 +159,13 @@ function Ensure-BootDriverStaged {
         throw "Driver binary not found: $sysSrc"
     }
 
-    Copy-Item -Path $sysSrc -Destination $sysDst -Force
-    Write-Host "Copied $SysFileName -> $sysDst"
+    if (Test-Path -LiteralPath $sysDst) {
+        Write-Host "Driver binary already present: $sysDst (skipping copy)"
+    }
+    else {
+        Copy-Item -Path $sysSrc -Destination $sysDst -Force
+        Write-Host "Copied $SysFileName -> $sysDst"
+    }
 
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
     if (-not (Test-Path $key)) {

@@ -10,6 +10,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/libvirt-vm-disk.sh
 source "$ROOT/scripts/libvirt-vm-disk.sh"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" || ! -f "$IMAGE" ]]; then
@@ -65,7 +67,7 @@ guestfish_upload_rw() {
     : upload "$local_path" "$guest_path"
 }
 
-tmp="$(mktemp)"
+tmp="$(build_mktemp unattend.XXXXXX)"
 trap 'rm -f "$tmp"' EXIT
 printf '%s' "$c_unattend" >"$tmp"
 

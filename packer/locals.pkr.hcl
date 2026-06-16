@@ -44,7 +44,10 @@ locals {
   enable_winrm_ps1     = file("${path.root}/../http/enable-winrm.ps1")
   enable_winrm_locator = file("${path.root}/../http/enable-winrm-locator.cmd")
 
-  specialize_winrm_xml   = file("${path.root}/../http/specialize-winrm.xml.tpl")
+  specialize_winrm_xml = local.include_winpe_virtio_drivers ? "" : file("${path.root}/../http/specialize-winrm.xml.tpl")
+
+  specialize_post_install_xml = local.include_winpe_virtio_drivers ? file("${path.root}/../http/specialize-post-install.xml.tpl") : ""
+
   firstlogon_commands_xml = join("\n", compact([
     file("${path.root}/../http/firstlogon-winrm.xml.tpl"),
     var.install_auto_shutdown ? file("${path.root}/../http/firstlogon-install-shutdown.xml.tpl") : "",
@@ -107,6 +110,7 @@ locals {
     product_key                  = local.windows_product_key_xml
     include_winpe_virtio_drivers = local.include_winpe_virtio_drivers
     specialize_winrm_xml          = local.specialize_winrm_xml
+    specialize_post_install_xml   = local.specialize_post_install_xml
     firstlogon_commands_xml       = local.firstlogon_commands_xml
     specialize_virtio_xml         = local.specialize_virtio_xml
   }

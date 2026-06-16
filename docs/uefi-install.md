@@ -38,18 +38,20 @@ If the console shows the **SeaBIOS** banner or **CDBOOT: Couldn't find BOOTMGR**
 
 ### BdsDxe: No bootable option or device was found
 
-OVMF is running but cannot start the Windows DVD UEFI boot image (common on **Fedora QEMU 10** with Microsoft UDF ISOs: `failed to start … DVD … Time out`).
+OVMF is running but cannot start the Windows DVD UEFI boot image (common on **Fedora QEMU 10** with unmodified Microsoft UDF ISOs).
 
-**Fix (default):** use SeaBIOS for install and convert during provision:
+**Fix (Tekton-aligned default):** `install_firmware = "uefi"` runs `scripts/modify-windows-iso-for-uefi.sh`, which swaps `efisys.bin` / `cdboot.efi` for the noprompt variants and repacks a bootable ISO (`windows-uefi-install.iso` in the staging dir). Requires **p7zip** and **genisoimage**.
 
-```hcl
-install_firmware = "seabios"   # default in variables.pkr.hcl
-efi_boot         = true
-```
+If install still fails:
 
-Rebuild with `make clean && make build-2022`. Install runs under SeaBIOS; Packer runs `mbr2gpt` then boots with OVMF.
+1. Build log should show `UEFI install ISO: .../windows-uefi-install.iso (noprompt EFI bootloaders)`.
+2. Confirm OVMF 4M firmware: `Using OVMF: CODE=...OVMF_CODE_4M.qcow2`.
+3. In the OVMF boot menu, pick the entry for the **largest** Windows DVD (not PROVISION or VIRTIO-WIN).
+4. Run `make clean` and rebuild so stale NVRAM / install qcow2 are removed.
 
-If you set `install_firmware = "uefi"`, also check: unmodified Microsoft ISO (no `windows-uefi-install.iso`), pick **UEFI: … DVD** in OVMF, and `boot_order=1` on the Windows CD.
+**Install loop (Setup restarts from DVD every reboot):** caused by `boot_order=1` on the Windows ISO. The virtio root disk must be `boot_order=1` and the install DVD `boot_order=2`. Delete cached `windows-uefi-install.iso` after upgrading templates so autounattend is re-embedded in `boot.wim`.
+
+**Legacy fallback:** `install_firmware = "seabios"` installs on SeaBIOS then converts via mbr2gpt during provision (not used on the virtio-uefi-tekton branch).
 
 ### "The selected disk is of the GPT partition style"
 

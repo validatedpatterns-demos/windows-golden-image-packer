@@ -75,8 +75,10 @@ libvirt_uefi_install_boot_args() {
     return 1
   fi
   echo "Using OVMF: CODE=$OVMF_CODE VARS=$OVMF_VARS" >&2
+  # hd before cdrom: after the first reboot Windows Setup must boot the ESP on the
+  # virtio disk, not the install DVD (boot_order=1 on CD causes an install loop).
   LIBVIRT_UEFI_VIRT_INSTALL_ARGS=(
-    --boot "uefi,loader=${OVMF_CODE},loader.readonly=yes,loader.type=pflash,nvram.template=${OVMF_VARS},menu=on,cdrom"
+    --boot "uefi,loader=${OVMF_CODE},loader.readonly=yes,loader.type=pflash,nvram.template=${OVMF_VARS},menu=on,hd,cdrom"
     --features "acpi=on,smm=on"
   )
 }

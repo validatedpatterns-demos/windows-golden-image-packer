@@ -1,0 +1,22 @@
+---
+# Copy and edit, or use scripts/verify-sysprep-via-ansible.sh (auto-discovers WinRM port).
+#
+#   cp ansible/inventory/packer-vm.yml.example ansible/inventory/packer-vm.yml
+#   export WINRM_PASSWORD='your-admin-password'
+#   ansible-playbook -i ansible/inventory/packer-vm.yml \
+#     ansible/playbooks/verify-sysprep-succeeded.yml
+#
+# WinRM port: run scripts/show-packer-console.sh while the Packer provision VM is running.
+
+all:
+  hosts:
+    packer_vm:
+      ansible_host: 127.0.0.1
+      ansible_port: 4266
+      ansible_connection: winrm
+      ansible_winrm_scheme: http
+      ansible_winrm_transport: ntlm
+      ansible_winrm_message_encryption: always
+      ansible_winrm_server_cert_validation: ignore
+      ansible_user: Administrator
+      ansible_password: "{{ lookup('env', 'WINRM_PASSWORD') }}"

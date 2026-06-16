@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 MARKER='SPDX-License-Identifier: Apache-2.0'
 
 add_hash_header() {
@@ -10,7 +12,7 @@ add_hash_header() {
   [[ -f "$file" ]] || return 0
   grep -q "$MARKER" "$file" && return 0
   local tmp
-  tmp="$(mktemp)"
+  tmp="$(build_mktemp license-header.XXXXXX)"
   {
     echo '# Copyright 2026 Red Hat, Inc.'
     echo '# SPDX-License-Identifier: Apache-2.0'
@@ -25,7 +27,7 @@ add_xml_header() {
   [[ -f "$file" ]] || return 0
   grep -q "$MARKER" "$file" && return 0
   local tmp
-  tmp="$(mktemp)"
+  tmp="$(build_mktemp license-header.XXXXXX)"
   if head -1 "$file" | grep -q '^<?xml'; then
     head -1 "$file" >"$tmp"
     {
@@ -54,7 +56,7 @@ add_cmd_header() {
   [[ -f "$file" ]] || return 0
   grep -q "$MARKER" "$file" && return 0
   local tmp
-  tmp="$(mktemp)"
+  tmp="$(build_mktemp license-header.XXXXXX)"
   {
     echo '@REM Copyright 2026 Red Hat, Inc.'
     echo '@REM SPDX-License-Identifier: Apache-2.0'

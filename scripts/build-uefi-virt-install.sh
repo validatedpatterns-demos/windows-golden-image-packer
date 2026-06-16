@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 #!/usr/bin/env bash
-# Unattended Windows install via virt-install, then Packer provision converts MBR→GPT for UEFI.
-# Microsoft UDF install ISOs often fail OVMF DVD boot (BdsDxe timeout) on Fedora QEMU 10; SeaBIOS
-# install + mbr2gpt during provision is the reliable path. Set install_firmware=uefi to try direct UEFI install.
+# Unattended Windows install via virt-install: UEFI + virtio-blk root (Tekton windows-efi-installer).
+# WinPE loads viostor from virtio-win CD; specialize runs virtio-win-gt MSI + QEMU GA.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,6 +12,8 @@ VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 source "$ROOT/scripts/libvirt-vm-disk.sh"
 # shellcheck source=scripts/libvirt-cleanup.sh
 source "$ROOT/scripts/libvirt-cleanup.sh"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 read_hcl() {
   "$ROOT/scripts/read-pkrvar.sh" "$1" "$VAR_FILE" "${2:-}"
@@ -23,7 +24,8 @@ WINDOWS_EDITION="${WINDOWS_EDITION:-$(read_hcl windows_edition Standard)}"
 EDITION_LC="$(echo "$WINDOWS_EDITION" | tr '[:upper:]' '[:lower:]')"
 PACKER_STAGING="${PACKER_STAGING:-.packer-${VERSION}}"
 OUTPUT_PARENT="${OUTPUT_PARENT:-output}"
-INSTALL_FIRMWARE="${INSTALL_FIRMWARE:-$(read_hcl install_firmware seabios)}"
+INSTALL_FIRMWARE="${INSTALL_FIRMWARE:-$(read_hcl install_firmware uefi)}"
+INSTALL_DISK_BUS="${INSTALL_DISK_BUS:-$(read_hcl install_disk_interface virtio)}"
 
 VM_MEMORY="$(read_hcl vm_memory 8192)"
 VM_CPUS="$(read_hcl vm_cpus 4)"
@@ -56,12 +58,24 @@ if [[ ! -f "$WINDOWS_ISO" ]]; then
 fi
 WINDOWS_ISO="$(readlink -f "$WINDOWS_ISO")"
 
+if [[ ! -f "$ROOT/drivers/viostor/2k22/amd64/viostor.sys" ]]; then
+  echo "VirtIO drivers not staged. Run: make stage-virtio" >&2
+  exit 1
+fi
+if [[ ! -f "$ROOT/drivers/virtio-win-gt-x64.msi" ]]; then
+  echo "virtio-win-gt-x64.msi not staged. Run: STAGE_FORCE=1 make stage-virtio" >&2
+  exit 1
+fi
+
 STAGING_DIR="$ROOT/$OUTPUT_PARENT/$PACKER_STAGING"
 mkdir -p "$STAGING_DIR"
 
 DISK_PATH="$STAGING_DIR/packer-win${VERSION}-${EDITION_LC}-install.qcow2"
-AUTOUNATTEND_XML="$(mktemp)"
+AUTOUNATTEND_XML="$(build_mktemp autounattend.XXXXXX)"
 PROVISION_ISO="$STAGING_DIR/provision.iso"
+VIRTIO_ISO="$STAGING_DIR/virtio-drivers.iso"
+WINDOWS_INSTALL_ISO="$WINDOWS_ISO"
+WINDOWS_UEFI_ISO="$STAGING_DIR/windows-uefi-install.iso"
 UNATTEND_FLOPPY="$STAGING_DIR/unattend-floppy.img"
 VM_NAME="win-uefi-install-${VERSION}"
 LIBVIRT_CONNECT="${LIBVIRT_CONNECT:-$(libvirt_default_connect)}"
@@ -69,7 +83,6 @@ LIBVIRT_CONNECT="${LIBVIRT_CONNECT:-$(libvirt_default_connect)}"
 libvirt_check_build_prereqs "$LIBVIRT_CONNECT"
 
 log() {
-  # stdout so phase banners stay visible when make captures stderr from virt-install
   echo "$*"
 }
 
@@ -90,13 +103,27 @@ case "$INSTALL_FIRMWARE" in
     ;;
 esac
 
-UEFI="$UEFI_FLAG" VERSION="$VERSION" VAR_FILE="$VAR_FILE" INSTALL_AUTO_SHUTDOWN=1 "$ROOT/scripts/render-autounattend.sh" >"$AUTOUNATTEND_XML"
-OUT="$PROVISION_ISO" "$ROOT/scripts/create-provision-iso.sh" "$AUTOUNATTEND_XML"
-"$ROOT/scripts/create-unattend-floppy-image.sh" "$AUTOUNATTEND_XML" "$UNATTEND_FLOPPY"
+case "$INSTALL_DISK_BUS" in
+  virtio | virtio-scsi | sata | ide) ;;
+  *)
+    echo "ERROR: install_disk_interface must be virtio, virtio-scsi, sata, or ide (got: $INSTALL_DISK_BUS)" >&2
+    exit 1
+    ;;
+esac
 
-rm -f "$STAGING_DIR/provision-drivers.iso" "$STAGING_DIR/windows-uefi-install.iso" \
-  "$STAGING_DIR/windows-uefi-install.iso.stamp" "$STAGING_DIR/windows-install-with-autounattend.iso" \
-  "$STAGING_DIR/unattend-usb.img"
+UEFI="$UEFI_FLAG" VERSION="$VERSION" VAR_FILE="$VAR_FILE" INSTALL_AUTO_SHUTDOWN=1 "$ROOT/scripts/render-autounattend.sh" >"$AUTOUNATTEND_XML"
+
+if [[ "$INSTALL_FIRMWARE" == "uefi" ]]; then
+  "$ROOT/scripts/modify-windows-iso-for-uefi.sh" "$WINDOWS_ISO" "$WINDOWS_UEFI_ISO" "$AUTOUNATTEND_XML"
+  WINDOWS_INSTALL_ISO="$WINDOWS_UEFI_ISO"
+fi
+
+PROVISION_ISO_SLIM=1 OUT="$PROVISION_ISO" "$ROOT/scripts/create-provision-iso.sh" "$AUTOUNATTEND_XML"
+OUT="$VIRTIO_ISO" "$ROOT/scripts/create-provision-drivers-iso.sh"
+
+rm -f "$STAGING_DIR/provision-drivers.iso" \
+  "$STAGING_DIR/windows-install-with-autounattend.iso" \
+  "$STAGING_DIR/unattend-usb.img" "$UNATTEND_FLOPPY"
 
 libvirt_destroy_domain "$LIBVIRT_CONNECT" "$VM_NAME" 0
 if virsh --connect "$LIBVIRT_CONNECT" dominfo "$VM_NAME" &>/dev/null; then
@@ -111,9 +138,9 @@ rm -f "$DISK_PATH"
 if libvirt_uses_system_connect "$LIBVIRT_CONNECT"; then
   qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
   libvirt_prepare_install_disk_for_system "$DISK_PATH"
-  libvirt_disk_args "$DISK_PATH" sata ""
+  libvirt_disk_args "$DISK_PATH" "$INSTALL_DISK_BUS" "" "1"
 else
-  libvirt_disk_args "$DISK_PATH" sata "${DISK_SIZE%G}"
+  libvirt_disk_args "$DISK_PATH" "$INSTALL_DISK_BUS" "${DISK_SIZE%G}" "1"
 fi
 
 GRAPHICS=(--graphics vnc,listen=127.0.0.1)
@@ -132,23 +159,37 @@ if [[ "$INSTALL_FIRMWARE" == "uefi" ]] && pkrvar_vtpm_enabled "$VAR_FILE" "$ROOT
   mapfile -t TPM_ARGS < <(libvirt_tpm_args "$VAR_FILE" "$ROOT" 1)
 fi
 
+VIRT_INSTALL_DISKS=(
+  --disk "path=${WINDOWS_INSTALL_ISO},device=cdrom,bus=sata,boot_order=2"
+  --disk "path=${PROVISION_ISO},device=cdrom,bus=sata"
+  --disk "path=${VIRTIO_ISO},device=cdrom,bus=sata"
+)
+
+if [[ "$INSTALL_FIRMWARE" == "seabios" ]]; then
+  "$ROOT/scripts/create-unattend-floppy-image.sh" "$AUTOUNATTEND_XML" "$UNATTEND_FLOPPY"
+  VIRT_INSTALL_DISKS+=(--disk "path=${UNATTEND_FLOPPY},device=floppy,readonly=on")
+fi
+
 log ""
-log "=== Phase 1/2: Windows install (virt-install) ==="
+log "=== Phase 1/2: Windows install (virt-install, UEFI + virtio-blk) ==="
 log "Unattended Setup runs in the libvirt VM; this phase usually takes 30-60 minutes."
-log "The golden image is still UEFI/GPT after Phase 2 (Packer mbr2gpt + virtio + sysprep)."
 log ""
 log "Starting Windows Server ${VERSION} install VM (${WINDOWS_EDITION})"
 log "  libvirt:          $LIBVIRT_CONNECT"
-log "  Install firmware: $INSTALL_FIRMWARE (SeaBIOS is normal; Packer converts to UEFI later)"
+log "  Install firmware: $INSTALL_FIRMWARE"
+log "  Root disk bus:    $INSTALL_DISK_BUS"
 log "  Machine:          $INSTALL_MACHINE"
 log "  Windows ISO:      $WINDOWS_ISO"
-log "  Install disk:     $DISK_PATH (SATA via libvirt)"
-log "  PROVISION ISO:    $PROVISION_ISO"
-log "  Unattend floppy:  $UNATTEND_FLOPPY"
-if [[ "$INSTALL_FIRMWARE" == "seabios" ]]; then
-  log "  Console: SeaBIOS + Windows Setup (no OVMF menu expected in this phase)"
+if [[ "$INSTALL_FIRMWARE" == "uefi" ]]; then
+  log "  UEFI install ISO: $WINDOWS_INSTALL_ISO (noprompt EFI bootloaders)"
+fi
+log "  Install disk:     $DISK_PATH (boot_order=1 — reboots continue on disk, not DVD)"
+log "  PROVISION ISO:    $PROVISION_ISO (autounattend + WinRM)"
+log "  VirtIO ISO:       $VIRTIO_ISO (WinPE drivers + virtio-win-gt MSI)"
+if [[ "$INSTALL_FIRMWARE" == "uefi" ]]; then
+  log "  Console: OVMF should auto-boot the Windows DVD (noprompt ISO); use boot menu if needed"
 else
-  log "  Console: pick UEFI: … DVD in the OVMF boot menu if prompted"
+  log "  Console: SeaBIOS + Windows Setup"
 fi
 log ""
 virt-install \
@@ -161,11 +202,9 @@ virt-install \
   --osinfo win2k22 \
   "${LIBVIRT_UEFI_VIRT_INSTALL_ARGS[@]}" \
   "${TPM_ARGS[@]}" \
+  "${VIRT_INSTALL_DISKS[@]}" \
   "${DISK_CONTROLLER_ARGS[@]}" \
   "${DISK_DEVICE_ARG[@]}" \
-  --disk "path=${WINDOWS_ISO},device=cdrom,bus=sata,boot_order=1" \
-  --disk "path=${PROVISION_ISO},device=cdrom,bus=sata" \
-  --disk "path=${UNATTEND_FLOPPY},device=floppy,readonly=on" \
   "${GRAPHICS[@]}" \
   --noautoconsole \
   --wait -1 &
@@ -176,7 +215,7 @@ for _ in $(seq 1 60); do
     if [[ "$INSTALL_FIRMWARE" == "uefi" ]]; then
       if ! virsh --connect "$LIBVIRT_CONNECT" dumpxml "$VM_NAME" | grep -q 'type=.pflash'; then
         echo "ERROR: $VM_NAME has no OVMF loader (libvirt defaulted to SeaBIOS)." >&2
-        echo "  Install edk2-ovmf, destroy the domain, set install_firmware=seabios, and rebuild." >&2
+        echo "  Install edk2-ovmf, destroy the domain, and rebuild." >&2
         exit 1
       fi
     fi
@@ -189,7 +228,6 @@ for _ in $(seq 1 60); do
 done
 
 log "virt-install started (domain: $VM_NAME). Waiting for Windows Setup to finish and power off..."
-log "  When unattended install succeeds, the guest shuts down automatically (Server Manager = install done; run: shutdown /s /t 0)"
 install_start=$(date +%s)
 last_progress=0
 while kill -0 "$INSTALL_PID" 2>/dev/null; do
@@ -201,7 +239,6 @@ while kill -0 "$INSTALL_PID" 2>/dev/null; do
     log ""
     log "  [${mins}m] Install still in progress (VM state: ${state}). Typical total: 30-60 minutes."
     log "  Watch the VM: virt-viewer --connect $LIBVIRT_CONNECT $VM_NAME"
-    log "  After this phase: Packer provision (mbr2gpt, VirtIO drivers, sysprep)."
     log ""
     last_progress=$elapsed
   fi
@@ -216,5 +253,5 @@ libvirt_fixup_disk_for_build_user "$DISK_PATH"
 log ""
 log "=== Phase 1/2 complete ==="
 log "Install finished: $DISK_PATH"
-log "Next: Phase 2 Packer provision (OVMF, mbr2gpt, virtio, sysprep) — typically 45-90 minutes."
+log "Next: Phase 2 Packer provision + sysprep on OVMF/virtio-blk — typically 45-90 minutes."
 log ""

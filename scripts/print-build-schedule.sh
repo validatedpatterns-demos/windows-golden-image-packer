@@ -40,16 +40,13 @@ steps_for_profile() {
   case "$1" in
     full-uefi)
       cat <<'EOF'
-Phase 1: Windows install (virt-install)|30|45|60
+Phase 1: Windows install (virt-install, UEFI + virtio-blk)|30|45|60
 Phase 2: Waiting for WinRM|5|20|90
-Upload scripts + VirtIO drivers to guest|2|5|15
-VirtIO drivers + guest reboot|5|10|20
-mbr2gpt + UEFI boot repair|3|8|15
+Upload scripts + drivers to guest|2|5|15
+Verify UEFI + VirtIO boot drivers|2|5|10
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
-Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
-Phase 3: OVMF boot + UEFI BCD repair|3|8|15
-Sysprep + guest shutdown (OVMF)|10|18|45
+Sysprep + guest shutdown (OVMF/virtio-blk)|10|18|45
 Finalize qcow2 + optimize|2|5|10
 Golden image promoted to output/|0|1|2
 EOF
@@ -57,14 +54,11 @@ EOF
     skip-install)
       cat <<'EOF'
 Phase 2: Waiting for WinRM|5|20|90
-Upload scripts + VirtIO drivers to guest|2|5|15
-VirtIO drivers + guest reboot|5|10|20
-mbr2gpt + UEFI boot repair|3|8|15
+Upload scripts + drivers to guest|2|5|15
+Verify UEFI + VirtIO boot drivers|2|5|10
 QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
-Guest shutdown (prep complete, no sysprep on SeaBIOS)|2|5|10
-Phase 3: OVMF boot + UEFI BCD repair|3|8|15
-Sysprep + guest shutdown (OVMF)|10|18|45
+Sysprep + guest shutdown (OVMF/virtio-blk)|10|18|45
 Finalize qcow2 + optimize|2|5|10
 Golden image promoted to output/|0|1|2
 EOF
@@ -94,11 +88,10 @@ EOF
       ;;
     provision-gpt)
       cat <<'EOF'
-Waiting for WinRM (OVMF boot)|5|15|45
-Upload scripts + VirtIO drivers to guest|2|5|15
-UEFI boot verify + mbr2gpt skip/repair|1|4|10
-Guest reboot (OVMF)|3|8|15
-VirtIO, QEMU-GA, OpenSSH, password, keys, locale|8|15|35
+Waiting for WinRM (OVMF/virtio-blk boot)|5|15|45
+Upload scripts + drivers to guest|2|5|15
+Verify UEFI + VirtIO boot drivers|2|5|10
+QEMU-GA, OpenSSH, password, keys, locale|8|15|35
 Disk shrink (06-shrink-disk, incl. cipher /w)|15|35|60
 Sysprep + guest shutdown|10|18|45
 Finalize qcow2 + optimize|2|5|10

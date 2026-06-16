@@ -7,6 +7,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 usage() {
   cat <<'EOF'
@@ -19,14 +21,13 @@ Environment (optional overrides):
   QUAY_IMAGE_2025     Image ref for Windows Server 2025 builds
   QUAY_IMAGE_REFS     Space-separated list of refs (pushes the same disk to each)
   CONTAINER_TOOL      podman or docker (default: podman, then docker)
-  TMPDIR              Temp dir for small files (Containerfile); mktemp respects this
+  BUILD_TMPDIR        Temp dir for small files (default: output/.build-tmp)
   QUAY_PUSH_WORK_DIR  Unused (kept for compatibility); build context is the qcow2 directory
 
 Prerequisites: podman|docker login quay.io (or your registry host)
 
-Disk space: the qcow2 is not copied into /tmp. Podman may still use TMPDIR and
+Disk space: the qcow2 is not copied into the build temp dir. Podman may still use
 /var/lib/containers during layer commit (often needs ~1x image size free somewhere).
-Set TMPDIR to a directory on a large filesystem before push if /tmp is small.
 EOF
 }
 
@@ -134,8 +135,8 @@ build_container_disk() {
   qcow2_dir="$(dirname "$abs_qcow2")"
   qcow2_name="$(basename "$abs_qcow2")"
 
-  # Build from the qcow2 directory so we do not copy the full image into /tmp.
-  containerfile="$(mktemp)"
+  # Build from the qcow2 directory so we do not copy the full image into build temp.
+  containerfile="$(build_mktemp containerfile.XXXXXX)"
   trap 'rm -f "$containerfile"' RETURN
   cat >"$containerfile" <<EOF
 # KubeVirt / OpenShift Virtualization container disk (qemu uid 107).
@@ -145,7 +146,7 @@ COPY --chown=107:107 ${qcow2_name} /disk/disk.qcow2
 EOF
 
   log "Building container disk image ($("$tool" --version | head -1))..."
-  log "Build context: $qcow2_dir (qcow2 not staged under /tmp)"
+  log "Build context: $qcow2_dir (qcow2 not staged in build temp dir)"
   "$tool" build --format docker -f "$containerfile" -t "$image_tag" "$qcow2_dir"
 }
 

@@ -6,6 +6,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 PACKER_DIR="$ROOT/packer"
 VAR_FILE="${VAR_FILE:-$ROOT/build.pkrvars.hcl}"
 VERSION="${VERSION:-2022}"
@@ -32,7 +34,7 @@ if [[ "${INSTALL_AUTO_SHUTDOWN:-0}" == "1" ]]; then
   SHUTDOWN_FLAG="-var=install_auto_shutdown=true"
 fi
 
-rendered="$(mktemp)"
+rendered="$(build_mktemp autounattend.XXXXXX)"
 trap 'rm -f "$rendered"' EXIT
 
 # shellcheck disable=SC2016

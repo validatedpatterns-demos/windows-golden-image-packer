@@ -7,6 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 OUT="${OUT:-$ROOT/output/provision-drivers.iso}"
 
 if [[ ! -f "$ROOT/drivers/viostor/2k22/amd64/viostor.sys" ]]; then
@@ -19,7 +21,7 @@ if ! command -v xorriso >/dev/null 2>&1; then
   exit 1
 fi
 
-WORKDIR="$(mktemp -d)"
+WORKDIR="$(build_mktemp_dir provision-drivers-iso.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 cp -a "$ROOT/drivers/." "$WORKDIR/"
@@ -27,7 +29,7 @@ cp -a "$ROOT/drivers/." "$WORKDIR/"
 mkdir -p "$(dirname "$OUT")"
 xorriso -as mkisofs \
   -rock -joliet -joliet-long \
-  -volid PROVISION \
+  -volid VIRTIO-WIN \
   -o "$OUT" \
   "$WORKDIR"
 

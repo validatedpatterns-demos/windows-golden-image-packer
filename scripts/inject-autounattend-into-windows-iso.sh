@@ -9,6 +9,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 usage() {
   echo "Usage: $0 <windows.iso> <autounattend.xml> <output.iso>" >&2
@@ -44,7 +46,7 @@ if [[ -f "$OUT_ISO" && -f "${OUT_ISO}.stamp" && "$(cat "${OUT_ISO}.stamp")" == "
   exit 0
 fi
 
-WORKDIR="$(mktemp -d)"
+WORKDIR="$(build_mktemp_dir inject-autounattend.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 BOOTWIM="$WORKDIR/sources/boot.wim"

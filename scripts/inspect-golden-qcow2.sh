@@ -8,6 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/libvirt-vm-disk.sh
 source "$ROOT/scripts/libvirt-vm-disk.sh"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" ]]; then
@@ -99,7 +101,7 @@ inspect_hive_control_set() {
 }
 
 if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v hivexget >/dev/null 2>&1; then
-  tmp_hive="$(mktemp)"
+  tmp_hive="$(build_mktemp system.XXXXXX)"
   if libguestfs_direct guestfish --ro -a "$IMAGE" -i download /Windows/System32/config/SYSTEM "$tmp_hive" 2>/dev/null; then
     echo ""
     echo "VirtIO boot-start (offline registry):"
@@ -143,7 +145,7 @@ elif [[ ! -r "$IMAGE" ]]; then
 fi
 
 if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strings >/dev/null 2>&1 && command -v hivexsh >/dev/null 2>&1; then
-  tmp_bcd="$(mktemp)"
+  tmp_bcd="$(build_mktemp bcd.XXXXXX)"
   bcd_get_element() {
     local hive="$1"
     local key="$2"
@@ -170,11 +172,17 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strin
   if [[ "$bcd_ok" -eq 1 ]]; then
     echo ""
     echo "UEFI BCD boot menu sanity:"
-    windows_server_count="$(strings -el "$tmp_bcd" 2>/dev/null | rg -x "Windows Server" -c || true)"
-    windows_server_count="${windows_server_count:-0}"
-    echo "  Windows Server menu entry strings: ${windows_server_count} (expect 1)"
-    if [[ "$windows_server_count" -gt 1 ]]; then
-      echo "  FAIL: duplicate Windows boot loaders in BCD (boot menu shows two 'Windows Server' entries; winload.efi 0xc000000f risk)" >&2
+    mapfile -t bcd_objects < <(printf 'cd Objects\nls\nquit\n' | hivexsh "$tmp_bcd" 2>/dev/null | rg '^\{' || true)
+    bcd_winload_loader_count=0
+    for guid in "${bcd_objects[@]}"; do
+      app_path="$(bcd_get_element "$tmp_bcd" "\\Objects\\${guid}\\Elements\\12000002" || true)"
+      if printf '%s' "$app_path" | rg -qi 'winload\.efi'; then
+        bcd_winload_loader_count=$((bcd_winload_loader_count + 1))
+      fi
+    done
+    echo "  BCD osloader objects (winload.efi): ${bcd_winload_loader_count} (expect 1)"
+    if [[ "$bcd_winload_loader_count" -ne 1 ]]; then
+      echo "  FAIL: BCD store has ${bcd_winload_loader_count} winload osloader objects (orphan loaders -> 0xc000000f/0xc0000001)" >&2
       bcd_rc=1
     fi
 
@@ -196,18 +204,52 @@ if [[ -r "$IMAGE" ]] && command -v guestfish >/dev/null 2>&1 && command -v strin
       bcd_rc=1
     fi
 
-    mapfile -t bcd_objects < <(printf 'cd Objects\nls\nquit\n' | hivexsh "$tmp_bcd" 2>/dev/null | rg '^\{' || true)
-    bcd_winload_loader_count=0
-    for guid in "${bcd_objects[@]}"; do
+    loader_osdevice_ok=0
+    loader_partition_device_ok=0
+    for guid in "${display_guids[@]}"; do
       app_path="$(bcd_get_element "$tmp_bcd" "\\Objects\\${guid}\\Elements\\12000002" || true)"
-      if printf '%s' "$app_path" | rg -qi 'winload\.efi'; then
-        bcd_winload_loader_count=$((bcd_winload_loader_count + 1))
+      if ! printf '%s' "$app_path" | rg -qi 'winload\.efi'; then
+        continue
+      fi
+      device_key="\\Objects\\${guid}\\Elements\\11000001"
+      osdevice_key="\\Objects\\${guid}\\Elements\\11000002"
+      if bcd_get_element "$tmp_bcd" "$osdevice_key" >/dev/null 2>&1; then
+        loader_osdevice_ok=1
+      else
+        echo "  FAIL: winload loader ${guid} missing osdevice element (0xc000000f risk)" >&2
+        bcd_rc=1
+      fi
+      if device_raw="$(hivexget "$tmp_bcd" "$device_key" Element 2>/dev/null | xxd -p | tr -d '\n')"; then
+        devtype="${device_raw:32:8}"
+        part_hex="${device_raw:64:32}"
+        if [[ "$devtype" == '06000000' && "$part_hex" != '00000000000000000000000000000000' ]]; then
+          loader_partition_device_ok=1
+        else
+          echo "  FAIL: winload loader ${guid} device is not GPT partition type 0x06 with partition GUID (0xc000000f risk)" >&2
+          bcd_rc=1
+        fi
+      else
+        echo "  FAIL: winload loader ${guid} missing device element (0xc000000f risk)" >&2
+        bcd_rc=1
       fi
     done
-    echo "  BCD osloader objects (winload.efi): ${bcd_winload_loader_count} (expect 1)"
-    if [[ "$bcd_winload_loader_count" -ne 1 ]]; then
-      echo "  FAIL: BCD store has ${bcd_winload_loader_count} winload osloader objects (orphan loaders -> 0xc000000f/0xc0000001)" >&2
+    if [[ "$display_winload_count" -eq 1 && "$loader_osdevice_ok" -eq 1 ]]; then
+      echo "  winload loader osdevice: present (expect present)"
+    fi
+    if [[ "$display_winload_count" -eq 1 && "$loader_partition_device_ok" -eq 1 ]]; then
+      echo "  winload loader device: GPT partition GUID (expect type 0x06 + GUID)"
+    fi
+
+    # Raw UTF-16 "Windows Server" count can exceed 1 even with a single loader (description
+    # duplicated across BCD elements/aliases). Fail only when winload object count also > 1.
+    windows_server_count="$(strings -el "$tmp_bcd" 2>/dev/null | rg -x "Windows Server" -c || true)"
+    windows_server_count="${windows_server_count:-0}"
+    echo "  Windows Server menu entry strings: ${windows_server_count} (informational; expect 1 when winload objects > 1)"
+    if [[ "$windows_server_count" -gt 1 && "$bcd_winload_loader_count" -gt 1 ]]; then
+      echo "  FAIL: duplicate Windows boot loaders in BCD (boot menu shows two 'Windows Server' entries; winload.efi 0xc000000f risk)" >&2
       bcd_rc=1
+    elif [[ "$windows_server_count" -gt 1 ]]; then
+      echo "  NOTE: duplicate 'Windows Server' strings with a single winload object (benign BCD description copies)" >&2
     fi
   fi
   rm -f "$tmp_bcd"

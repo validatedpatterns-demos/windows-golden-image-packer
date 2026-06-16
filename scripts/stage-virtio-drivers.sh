@@ -8,6 +8,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/build-temp.sh
+source "$ROOT/scripts/build-temp.sh"
 ISO="${1:-$ROOT/downloads/virtio-win.iso}"
 DRIVERS="${DRIVERS:-$ROOT/drivers}"
 READY_MARKER="${READY_MARKER:-$ROOT/extras/.virtio-win-staged.ready}"
@@ -23,7 +25,8 @@ fi
 drivers_ready() {
   [[ -f "$DRIVERS/viostor/2k22/amd64/viostor.sys" ]] && \
     [[ -f "$DRIVERS/NetKVM/2k22/amd64/netkvm.sys" ]] && \
-    [[ -f "$DRIVERS/guest-agent/qemu-ga-x86_64.msi" ]]
+    [[ -f "$DRIVERS/guest-agent/qemu-ga-x86_64.msi" ]] && \
+    [[ -f "$DRIVERS/virtio-win-gt-x64.msi" ]]
 }
 
 if [[ "${STAGE_FORCE:-0}" != "1" ]] && drivers_ready; then
@@ -32,13 +35,13 @@ if [[ "${STAGE_FORCE:-0}" != "1" ]] && drivers_ready; then
   exit 0
 fi
 
-EXTRACT_TMP="$(mktemp -d)"
+EXTRACT_TMP="$(build_mktemp_dir virtio-extract.XXXXXX)"
 trap 'rm -rf "$EXTRACT_TMP"' EXIT
 
 echo "Extracting virtio-win (7z resolves hardlinks)..."
 if command -v 7z >/dev/null 2>&1; then
   7z x -y "-o${EXTRACT_TMP}" "$ISO" \
-    viostor NetKVM vioscsi Balloon guest-agent >/dev/null
+    viostor NetKVM vioscsi Balloon guest-agent virtio-win-gt-x64.msi >/dev/null
 else
   echo "7z is required to extract virtio-win.iso on this host (install p7zip)." >&2
   exit 1
@@ -74,6 +77,10 @@ done
 
 if [[ -d "$EXTRACT_TMP/guest-agent" ]]; then
   cp -a "$EXTRACT_TMP/guest-agent" "$DRIVERS/"
+fi
+
+if [[ -f "$EXTRACT_TMP/virtio-win-gt-x64.msi" ]]; then
+  cp -a "$EXTRACT_TMP/virtio-win-gt-x64.msi" "$DRIVERS/"
 fi
 
 find "$DRIVERS" -name '*.pdb' -delete 2>/dev/null || true

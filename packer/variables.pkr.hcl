@@ -25,14 +25,14 @@ variable "windows_edition" {
 
 variable "efi_boot" {
   type        = bool
-  description = "UEFI/OVMF golden images for OpenShift Virtualization. true: virt-install install + mbr2gpt during provision + OVMF sysprep (recommended). false: single-pass SeaBIOS Packer build (dev hosts only)."
+  description = "UEFI/OVMF golden images for OpenShift Virtualization. true: virt-install (virtio-blk) + Packer provision/sysprep (recommended). false: single-pass SeaBIOS Packer build (dev hosts only)."
   default     = true
 }
 
 variable "install_firmware" {
   type        = string
-  description = "Firmware for virt-install Windows Setup only: seabios (default; boots Microsoft UDF DVD) or uefi (direct OVMF DVD boot; often times out on Fedora QEMU 10). Final golden image is still UEFI when efi_boot=true."
-  default     = "seabios"
+  description = "Firmware for virt-install Windows Setup: uefi (default; virtio-blk + OVMF) or seabios (legacy dev path)."
+  default     = "uefi"
 
   validation {
     condition     = contains(["seabios", "uefi"], var.install_firmware)
@@ -134,8 +134,8 @@ variable "disk_size" {
 
 variable "install_disk_interface" {
   type        = string
-  description = "Disk bus during Windows Setup (virt-install / Packer install). Use sata for virt-install UEFI path or ide for Packer SeaBIOS install. Not used for the Packer provision pass (see provision_disk_interface)."
-  default     = "ide"
+  description = "Disk bus during Windows Setup (virt-install). Use virtio for OpenShift disk.bus=virtio parity."
+  default     = "virtio"
 
   validation {
     condition     = contains(["ide", "sata", "virtio", "virtio-scsi"], var.install_disk_interface)
