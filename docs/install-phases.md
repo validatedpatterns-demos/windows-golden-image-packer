@@ -1,26 +1,28 @@
-# Install phases (IDE setup, then VirtIO)
+# Install phases
 
-Windows Setup in WinPE often fails when the target disk is **VirtIO** or **VirtIO-SCSI** and drivers are not loaded yet (`DiskConfiguration` / `ImageInstall` errors). This project splits work into two logical phases.
+Windows Setup runs several **unattend passes** in order (`windowsPE` → `specialize` → `oobeSystem`) during install. That is normal and is still a single install VM. Packer **phase 2** (WinRM provisioners) only starts after virt-install completes and the install disk is handed to Packer.
 
-## Default: one `make build` (one VM — not two Packer runs at once)
+## Default: `make build` (virt-install + provision)
 
-Windows Setup itself runs several **unattend passes** in order (`windowsPE` → `specialize` → `oobeSystem`). That is normal and is still a single install. Packer **phase 2** (WinRM provisioners) only starts after those passes finish and the VM reboots.
+Production OpenShift images use **UEFI + virtio-blk** end to end ([tekton-aligned-build.md](tekton-aligned-build.md)).
 
 | Step | What happens |
 |------|----------------|
-| **Setup (unattend)** | SeaBIOS (`pc`), **IDE** disk, **e1000** NIC. Floppy has `autounattend.xml` + `enable-winrm.cmd`. Installs Windows and enables WinRM in the **specialize** pass (OpenSSH is deferred to Phase 2). |
-| **Packer provisioners** | WinRM: VirtIO drivers, QEMU guest agent, OpenSSH, password/keys, **sysprep**. |
+| **Phase 1 (virt-install)** | OVMF + **virtio-blk** root disk, **e1000** NIC. Windows ISO uses noprompt EFI bootloaders; autounattend is embedded in `boot.wim`. WinPE loads **viostor** from the virtio-win ISO; **post-install.ps1** installs **virtio-win-gt-x64.msi** and enables WinRM during **specialize**. |
+| **Phase 2 (Packer)** | WinRM on the install disk (OVMF + virtio-blk): verify VirtIO boot drivers, QEMU guest agent, OpenSSH, locale/OOBE prep, disk shrink, **sysprep**, offline inspect gates, optimize. |
 
-Defaults in `packer/variables.pkr.hcl`:
+Defaults in `packer/variables.pkr.hcl` and `example.pkrvars.hcl`:
 
 ```hcl
-install_disk_interface = "ide"
+efi_boot               = true
+install_firmware       = "uefi"
+install_disk_interface = "virtio"
 install_net_device     = "e1000"
 ```
 
-The finished **qcow2** can boot on OpenShift with **`disk.bus: virtio`** after phase 2 registers **viostor/vioscsi** as boot-start drivers (and the VM firmware matches the image — UEFI for production; see [docs/openshift-boot-troubleshooting.md](docs/openshift-boot-troubleshooting.md)).
+The finished **qcow2** boots on OpenShift with **`disk.bus: virtio`** after sysprep restores **viostor** boot-start keys. Boot-test enforces the same layout (`make boot-test`).
 
-## Optional: two Packer runs
+## Optional: two explicit Packer runs
 
 Use this if install succeeds but provisioning fails (or you want to retry phase 2 without reinstalling Windows).
 
@@ -30,10 +32,10 @@ Use this if install succeeds but provisioning fails (or you want to retry phase 
 
 ```bash
 cd packer
-packer build -force -var-file=../build.pkrvars.hcl -only=windows-golden-image.qemu.windows .
+packer build -force -var-file=../build.pkrvars.hcl -only=windows-golden-provision.qemu.from_install_gpt .
 ```
 
-Do **not** use `packer build build.pkr.hcl` (single file — variables missing) or bare `packer build .` (every build — two VMs).
+Do **not** use `packer build build.pkr.hcl` (single file — variables missing) or bare `packer build .` (every build — multiple VMs).
 
 ### Pass 1 – install only
 
@@ -43,7 +45,7 @@ make stage-virtio
 make build-install
 ```
 
-Output: `output/windows-server-<version>-<edition>-install.qcow2`
+Output: `output/.packer-<version>/packer-win<version>-<edition>-install.qcow2`
 
 ### Pass 2 – provision + sysprep
 
@@ -54,15 +56,24 @@ make build-provision-only VERSION=2022 \
 
 Output: `output/windows-server-<version>-<edition>.qcow2`
 
-If provision failed mid-way (especially after `mbr2gpt`), use `make recover-provision` instead — see [recover-build.md](recover-build.md).
+If provision failed mid-way, use `make recover-provision` — see [recover-build.md](recover-build.md).
 
-## Advanced: VirtIO disk during Setup
+## Legacy: SeaBIOS / IDE single-pass Packer install
 
-Only if you accept WinPE driver complexity:
+Only for dev hosts where virt-install is unavailable. Set in `build.pkrvars.hcl`:
 
 ```hcl
-install_disk_interface = "virtio-scsi"  # or "virtio"
-install_net_device     = "virtio-net"
+efi_boot               = false
+install_disk_interface = "ide"
 ```
 
-The autounattend answer file will include VirtIO driver paths on the PROVISION CD again.
+Do **not** deploy those qcow2 files to UEFI OpenShift VMs. See [uefi-install.md](uefi-install.md).
+
+## Advanced: other install disk buses
+
+```hcl
+install_disk_interface = "virtio-scsi"  # or "sata", "ide"
+install_net_device     = "virtio-net"   # requires WinPE VirtIO net drivers
+```
+
+The autounattend answer file must include matching VirtIO driver paths on the PROVISION / virtio-win media.

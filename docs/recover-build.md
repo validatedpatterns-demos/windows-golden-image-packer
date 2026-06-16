@@ -18,10 +18,10 @@ EXECUTE=1 make recover-provision VERSION=2022
 
 | Path | Meaning |
 |------|---------|
-| `output/.packer-2022/packer-win2022-standard-install.qcow2` | **Install** (virt-install pass 1). Usually **MBR** until provision runs. Untouched if provision failed early. |
-| `output/.packer-2022/work/packer-win2022-standard-provision` | **Provision** VM disk. May be **GPT** if `mbr2gpt` already ran. |
-| `output/.packer-2022/work/packer-win2022-standard` | **Single-pass** SeaBIOS build (`windows-golden-image`). May be **GPT** if provision failed after `mbr2gpt`. |
+| `output/.packer-2022/packer-win2022-standard-install.qcow2` | **Install** (virt-install pass 1). Untouched if provision failed early. |
+| `output/.packer-2022/work/packer-win2022-standard-provision` | **Provision** VM disk (partial phase 2). |
 | `output/.packer-2022/recovery/salvage-*.qcow2` | Safe copy made by `recover-provision` before retry. |
+| `output/windows-server-2022-standard.qcow2` | **Golden** image after successful promote. |
 
 Find candidates:
 
@@ -40,19 +40,17 @@ Install disk exists; work disk missing or empty.
 SKIP_INSTALL=1 make build-version VERSION=2022
 ```
 
-Skips virt-install (~45 min) and re-runs the full Packer provision pass (mbr2gpt, virtio, sysprep).
+Skips virt-install (~45 min) and re-runs the full Packer provision pass.
 
-### Provision failed after `mbr2gpt` (SeaBIOS prompt / stuck reboot)
+### Provision failed mid-way (VirtIO, sysprep, shrink, etc.)
 
-Work disk is **GPT**; a previous provision pass rebooted with **SeaBIOS** instead of OVMF.
-
-Recover from the **work** disk (or a copy), not the install disk:
+Recover from the **work** disk (or a copy), not a stale path under `work/`:
 
 ```bash
 EXECUTE=1 make recover-provision VERSION=2022
 ```
 
-This copies `work/packer-win*` to `recovery/salvage-*.qcow2` and runs `build-provision-only` with **OVMF** (auto-detected from GPT layout).
+This copies `work/packer-win*` to `recovery/salvage-*.qcow2` and runs `build-provision-only`.
 
 ### Manual provision retry (when you already have a safe copy)
 
@@ -70,31 +68,24 @@ make build-provision-only \
 | Mistake | Why it fails |
 |---------|----------------|
 | `BASE_IMAGE=.../work/packer-win...` | Packer `-force` wipes `work/` including your source disk |
-| `BASE_IMAGE=...-install.qcow2` after `mbr2gpt` failed on work disk | Install image is still **MBR**; you lose progress and re-run `mbr2gpt` |
-| `efi_boot=false` with a GPT work disk | SeaBIOS cannot boot post-`mbr2gpt` disks — use `recover-provision` or `BASE_IMAGE_IS_GPT=1` |
+| `BASE_IMAGE=...-install.qcow2` when work disk has provision progress | Install image has no WinRM provision / sysprep progress |
 | `packer build .` without `-only` | Starts multiple builds / two VMs |
 
 ## Build paths (for context)
 
-| `make` target | Packer build id | Firmware during provision |
-|---------------|-----------------|---------------------------|
-| `make build` (`efi_boot=true`) | `windows-golden-provision-mbr` then `windows-golden-provision-gpt-sysprep` | SeaBIOS for prep (mbr2gpt, VirtIO); OVMF for sysprep |
-| `make build-provision-sysprep-only` | `windows-golden-provision-gpt-sysprep` | OVMF only — resume after failed sysprep on GPT prep disk |
-| `make build` (`efi_boot=false`) | `windows-golden-image` | SeaBIOS (no `mbr2gpt` in current templates) |
+| `make` target | Packer build id | Notes |
+|---------------|-----------------|-------|
+| `make build` (`efi_boot=true`, default) | `windows-golden-provision` (`from_install_gpt`) | virt-install pass 1, then single OVMF + virtio-blk provision + sysprep |
+| `make build-install` | `windows-install-only` | Phase 1 only |
+| `make build-provision-only` | `windows-golden-provision` | Phase 2 from `BASE_IMAGE` |
+| `make build` (`efi_boot=false`, legacy) | `windows-golden-image` | Single-pass SeaBIOS Packer install |
 
-Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-install.md)).
+Production OpenShift images: **`efi_boot = true`** ([uefi-install.md](uefi-install.md), [tekton-aligned-build.md](tekton-aligned-build.md)).
 
-**Sysprep on SeaBIOS + GPT disk fails** (`SYSPRP BCD: Failed to get system partition`, `0x80073bc3`). After `mbr2gpt`, sysprep must run under OVMF. The MBR provision pass shuts down without sysprep; a second OVMF pass runs sysprep only.
-
-| Sysprep **>45 minutes** with no log progress | Often caused by re-running `01-install-virtio-drivers.ps1` on the gpt-sysprep pass without reboot. Current templates use `verify-virtio-boot-drivers.ps1` + `windows-restart` before sysprep. Check VNC: `./scripts/show-packer-console.sh`. |
-| `Timeout while waiting for machine to shut down` after sysprep on MBR pass | Sysprep failed on SeaBIOS (BCD generalize needs UEFI). Update templates and retry: `EXECUTE=1 make recover-provision VERSION=2022` (GPT work disk → sysprep-only), or copy work disk to `recovery/` and `make build-provision-sysprep-only BASE_IMAGE=...`. |
-
-| `Guest has not initialized the display` / blank VNC, **100% CPU** | **OVMF pflash opened as `format=raw`** on qcow2 firmware files loops; templates now use **`format=qcow2`** and **`ide-hd` on `ide.0`**. Confirm cmdline has **`format=qcow2`** on both pflash drives and **no `tpm-tis`**. Kill VM and retry. |
-
-| `unsupported bus type 'sata'` on provision | Packer QEMU uses `-drive if=sata`, which q35 rejects. SeaBIOS prep uses **`provision_disk_interface=ide`**; OVMF passes use **`provision_ovmf_disk_interface=virtio-scsi`**. |
-
-| `Disk ... is already in use by other guests ['win-uefi-install-2022']` | Stale **virt-install** domain still references the install qcow2 (common after Ctrl+C). Run **`make clean`** (uses `virsh undefine --nvram` for OVMF domains). Manual: `virsh --connect qemu:///session destroy win-uefi-install-2022; virsh --connect qemu:///session undefine win-uefi-install-2022 --nvram` |
-| `permission denied` opening `packer-win*-install.qcow2` on provision | Usually an **old** install disk left as `nobody:nobody` mode `0600` from `qemu:///system` before ACL/session defaults. **New builds** default to `qemu:///session` (disk stays yours) or set POSIX ACLs before system virt-install. One-time fix: `chown $USER:$USER output/.packer-2022/packer-win2022-standard-install.qcow2 && chmod u+rw ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. Ensure `kvm` group membership (`groups`) and `dnf install acl` if you force `LIBVIRT_CONNECT=qemu:///system`. |
+| Sysprep **>45 minutes** with no log progress | Check VNC: `./scripts/show-packer-console.sh`. Extract logs: `make extract-sysprep-log IMAGE=...` |
+| `Guest has not initialized the display` / blank VNC, **100% CPU** | Confirm OVMF pflash uses **`format=qcow2`** on firmware drives. Kill VM and retry. |
+| `Disk ... is already in use by other guests ['win-uefi-install-2022']` | Stale **virt-install** domain. Run **`make clean`** (`virsh undefine --nvram`). |
+| `permission denied` opening `packer-win*-install.qcow2` | Old disk owned by `nobody:nobody` from `qemu:///system`. New builds default to **`qemu:///session`**. One-time: `chown $USER:$USER ...` then `SKIP_INSTALL=1 make build-version VERSION=2022`. |
 
 ## When to give up and reinstall
 

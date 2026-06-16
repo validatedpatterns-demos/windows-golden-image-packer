@@ -33,6 +33,7 @@ jobs:
         run: bash ../scripts/validate-unattend.sh
         env:
           VAR_FILE: ci.pkrvars.hcl
+          # validate-unattend uses $TMPDIR for renders (must not create output/ before packer validate)
 
       - name: Packer validate
         run: packer validate -var-file=ci.pkrvars.hcl .

@@ -3,58 +3,49 @@
 ## Symptoms
 
 - VM with `disk.bus: virtio` does not boot (blank screen, automatic repair loop, or **INACCESSIBLE_BOOT_DEVICE** / stop `0x7B`)
-- Same image may boot on the Packer build host (IDE disk) but not in OpenShift Container Native Virtualization (CNV)
+- Same image boots in **`make boot-test`** but fails in OpenShift (firmware, TPM, or PVC sizing)
+- OOBE loops or product-key prompts on first deploy boot (unattend issue — see [boot-test.md](boot-test.md))
 
 Disk shrinking and qcow2 optimization do **not** change the guest boot path; they only affect file size on disk.
 
-## "No bootable device" (OVMF / UEFI)
+## Current build (`efi_boot = true`, default)
 
-On most **Fedora/libvirt OVMF** builds, firmware **does not boot virtio-blk** (`disk.bus: virtio`). You get **no bootable device** even with a healthy image.
+| Phase | Disk / firmware |
+|-------|-----------------|
+| virt-install | OVMF + **virtio-blk** root |
+| Packer provision + sysprep | OVMF + **virtio-blk** (OpenShift parity) |
+| boot-test | Session libvirt, **virtio-blk**, guest-agent channel |
 
-| Mistake | Result |
-|---------|--------|
-| SeaBIOS (MBR) image in a **UEFI** VM | OVMF: no bootable device |
-| **`bus: virtio`** (virtio-blk) under OVMF | OVMF never sees a bootable ESP |
-| UEFI image tested with **`BOOT_TEST_DISK_BUS=virtio`** | Same as above — use **`scsi`** |
-
-**Current `efi_boot = true` builds**:
-
-1. Install Windows on **SATA** (virt-install + WinPE).
-2. Provision on **SATA**, install **vioscsi/viostor** boot-start drivers, run **`07-repair-uefi-boot.ps1`**.
-3. Boot-test and OpenShift use **`disk.bus: scsi`** (virtio-scsi), not virtio-blk.
-
-Inspect an image:
+Inspect before upload:
 
 ```bash
 ./scripts/inspect-golden-qcow2.sh output/windows-server-2025-standard.qcow2
-make boot-test-2025   # libvirt qemu:///session + virtio-blk (OpenShift gate)
+./scripts/inspect-golden-unattend.sh output/windows-server-2025-standard.qcow2
+make boot-test-2025
 ```
 
-**Rebuild** after changing this; old qcow2 files will not self-heal.
+**Rebuild** after changing virtio/sysprep scripts; old qcow2 files will not self-heal.
 
-## Two common causes
+## Common causes
 
-### 1. VirtIO storage not loaded at boot (most common with `bus: virtio`)
+### 1. VirtIO storage not boot-start (most common with `bus: virtio`)
 
-The default build installs Windows on an **IDE** disk, then installs VirtIO drivers in WinRM. OpenShift VMs typically use a **VirtIO block** disk (`bus: virtio`), which needs the **viostor** driver (and **vioscsi** if you use SCSI) registered as **boot-start** before sysprep.
+OpenShift **`disk.bus: virtio`** needs **viostor** registered as **boot-start** in every control set that sysprep may clone. **vioscsi** is also boot-bound for clusters that use **`disk.bus: scsi`**.
 
-**Fixed in current builds** by:
+**Current builds** install drivers during Setup (virtio-win MSI + WinPE paths) and re-bind after sysprep in `restore-virtio-boot-after-sysprep.ps1`. Promote runs **`inspect-golden-qcow2.sh`** with **`INSPECT_VIRTIO_STRICT=1`**.
 
-- `specialize` unattend (`specialize-virtio-drivers.xml.tpl`) staging drivers from the PROVISION CD
-- `01-install-virtio-drivers.ps1` copying `viostor.sys` / `vioscsi.sys` into `System32\drivers` and creating **boot-start** `Services` keys (required because the build VM has no VirtIO disk, so `pnputil` alone does not register those services)
-- `enable-virtio-blk-boot-load.ps1` binding **viostor** for **`disk.bus: virtio`**
-- `enable-virtio-scsi-boot-load.ps1` binding **vioscsi** for **`disk.bus: scsi`**
-
-**Rebuild** after pulling these changes: `make clean && make build`, or re-run sysprep from the prep disk:
+Retry provision without reinstalling Windows:
 
 ```bash
-make build-provision-sysprep-only VERSION=2022 \
-  BASE_IMAGE=output/.packer-2022/packer-win2022-standard-provision-prep.qcow2
+make build-provision-only VERSION=2022 \
+  BASE_IMAGE=output/.packer-2022/packer-win2022-standard-install.qcow2
 ```
+
+Or recover from a partial work disk: [recover-build.md](recover-build.md).
 
 ### 2. Firmware mismatch (SeaBIOS image vs UEFI VM)
 
-The default Packer build uses **SeaBIOS** + **MBR** (`efi_boot = false`). Many CNV `VirtualMachine` examples use **UEFI**:
+Legacy **`efi_boot = false`** images are **SeaBIOS + MBR**. OpenShift `VirtualMachine` specs must use **UEFI** for production:
 
 ```yaml
 firmware:
@@ -63,33 +54,16 @@ firmware:
       secureBoot: false
 ```
 
-A BIOS-installed Windows image often **will not boot** under UEFI even with correct VirtIO drivers.
+A SeaBIOS-built image **will not boot** under OEFI even with correct VirtIO drivers. Rebuild with **`efi_boot = true`** ([uefi-install.md](uefi-install.md)).
 
-**Options:**
+### 3. Wrong disk bus in the VM spec
 
-| Approach | When to use |
-|----------|-------------|
-| **UEFI golden image** | Production on CNV — run [uefi-install.md](uefi-install.md) (`scripts/build-uefi-virt-install.sh`) or install with UEFI when Packer supports it on your QEMU version |
-| **BIOS VM firmware** (interim) | Test or short-term use of an existing SeaBIOS-built qcow2 |
+| Golden image | OpenShift `disk.bus` | Driver |
+|--------------|----------------------|--------|
+| Current default (virt-install + sysprep) | **`virtio`** | **viostor** |
+| Same image (alternate) | **`scsi`** | **vioscsi** (also installed) |
 
-Example VM fragment for a **SeaBIOS-built** image (check your cluster’s KubeVirt API version):
-
-```yaml
-spec:
-  template:
-    spec:
-      domain:
-        firmware:
-          bootloader:
-            bios: {}
-        devices:
-          disks:
-            - name: rootdisk
-              disk:
-                bus: scsi
-```
-
-Prefer **UEFI install** for new images rather than running production Windows VMs with BIOS firmware.
+Boot-test validates **`virtio`** only. Prefer **`bus: virtio`** to match the build and boot-test gate.
 
 ## Workarounds for an **existing** image (no rebuild yet)
 
@@ -124,7 +98,7 @@ See Red Hat / vendor recovery guides for attaching the virtio container disk on 
 
 ## Recommended production VM settings
 
-After a **rebuild** with current provisioners (or a **UEFI** base disk):
+After a **rebuild** with current provisioners:
 
 ```yaml
 spec:
@@ -139,7 +113,7 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: scsi
+                bus: virtio
           interfaces:
             - name: default
               masquerade: {}
@@ -158,7 +132,7 @@ Enable the **QEMU guest agent** on the VM spec if your platform documents it (dr
 
 ## Verify drivers inside a running test VM
 
-On a VM that boots (e.g. with `bus: sata`):
+On a VM that boots (e.g. with `bus: sata` temporarily):
 
 ```powershell
 Get-Service viostor, vioscsi -ErrorAction SilentlyContinue
@@ -166,10 +140,11 @@ Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\viostor -Name Start
 Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\vioscsi -Name Start
 ```
 
-`Start` should be **0** (boot) for both storage drivers before switching the disk to VirtIO in the VM spec.
+`Start` should be **0** (boot) for the storage driver matching your disk bus before switching to VirtIO in the VM spec.
 
 ## Related docs
 
 - [openshift-virtualization.md](openshift-virtualization.md) — import and DataVolume sizing
-- [install-phases.md](install-phases.md) — IDE install + VirtIO provisioners
-- [uefi-install.md](uefi-install.md) — UEFI base disk for CNV
+- [install-phases.md](install-phases.md) — virt-install + provision flow
+- [uefi-install.md](uefi-install.md) — UEFI install details
+- [boot-test.md](boot-test.md) — pre-upload boot validation

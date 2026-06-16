@@ -1,6 +1,6 @@
 # Using the golden image in OpenShift Virtualization
 
-The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers for **OpenShift `disk.bus: virtio`** (virtio-blk / **viostor**). **vioscsi** is also boot-bound for clusters that use **`disk.bus: scsi`**. UEFI installs use **SATA** during Setup so OVMF/WinPE are reliable.
+The build produces a **sysprepped** **qcow2** image with VirtIO disk/network drivers for **OpenShift `disk.bus: virtio`** (virtio-blk / **viostor**). **vioscsi** is also boot-bound for clusters that use **`disk.bus: scsi`**.
 
 **Firmware:** Default **`efi_boot = true`** builds **UEFI + GPT** images ([uefi-install.md](uefi-install.md)). OpenShift `VirtualMachine` specs must use **UEFI** firmware (`firmware.bootloader.efi`), not SeaBIOS. Boot-testing with `make boot-test` uses UEFI when `efi_boot` is true. SeaBIOS-only disks (`efi_boot = false`) will not boot in a UEFI VM.
 
@@ -91,10 +91,10 @@ To publish the same disk to **Quay** as a container image (optional), see [quay-
 
 - **Firmware**: UEFI (use the virt-install UEFI base disk, or confirm your Packer-built image boots with UEFI in a test VM)
 - **TPM**: vTPM device (recommended; matches golden-image build defaults)
-- **Disk bus**: VirtIO
+- **Disk bus**: **VirtIO** (`bus: virtio`) — matches default build and `make boot-test`. **`bus: scsi`** also works when **vioscsi** is boot-start (installed by default).
 - **Network**: masquerade/bridge with **VirtIO** model
 - **QEMU guest agent**: enabled on the VM spec so node operations work
-- **First boot**: sysprep OOBE runs once (locale, disk extend, Administrator password from `http/sysprep-oobe.xml.tpl`); the VM should stop at the **Administrator sign-in** screen.
+- **First boot**: sysprep OOBE runs once (locale, product key re-apply when configured, disk extend, Administrator password from `http/sysprep-oobe.xml.tpl`); the VM should reach **Administrator sign-in** without a product-key prompt when `product_key_*` is set in `build.pkrvars.hcl`.
 
 ```yaml
 spec:
@@ -105,7 +105,7 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: scsi
+                bus: virtio
           interfaces:
             - name: default
               masquerade: {}

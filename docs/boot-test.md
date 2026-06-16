@@ -6,7 +6,7 @@ Boot tests validate that a built **qcow2** starts without modifying the golden f
 
 **Alternate:** `BOOT_TEST_METHOD=packer` replays the **OVMF sysprep Packer** layout (q35, ide-hd on `ide.0`, e1000 user netdev, WinRM port forward, no guest agent). Use that when debugging Packer sysprep boot loops, not for production virtio validation.
 
-Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\unattend.xml` / `Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
+Golden images are **sysprepped** (`/generalize /oobe /mode:vm`). The first start after capture (including boot-test) runs **OOBE** using `C:\unattend.xml` / `Panther\unattend.xml` from `http/sysprep-oobe.xml.tpl` (**oobeSystem** only — not the file passed to `sysprep.exe`). First boot runs **SetupDisplayedProductKey** (skip product-key page), **slmgr /ipk** when a key is configured, **disk extension** (`extend-system-partition.ps1`) when the virtual disk is larger than the golden image, then remaining OOBE. First boot can take **10–20+ minutes**; do not power off during OOBE.
 
 If you see **"The computer restarted unexpectedly"** or **"Sysprep hasn't finished"**, the golden disk was likely captured or boot-tested before sysprep completed and shut down cleanly. Rebuild with current `sysprep.ps1` (no sysprep `/shutdown`; explicit `shutdown /s /t 0 /f` after OOBE unattend restore).
 
@@ -38,7 +38,8 @@ First boot after sysprep is fragile. Common causes:
 |-------|-----|
 | **vTPM added at boot-test** but sysprep ran without TPM | Default is now **`BOOT_TEST_TPM=0`** (matches `provision_sysprep_vtpm=false`). Do not set `BOOT_TEST_TPM=1` until after OOBE. |
 | **virtio-blk disk** without boot-bound **viostor** | Preflight fails or **INACCESSIBLE_BOOT_DEVICE** BSOD — **rebuild** golden (`restore-virtio-boot-after-sysprep.ps1`, `Sync-VirtioBootRegistryToAllControlSets`) |
-| **OOBE unattend parse error** | `./scripts/inspect-golden-unattend.sh output/windows-server-*.qcow2` — rebuild with fixed `sysprep-oobe.xml.tpl`. |
+| **OOBE unattend parse error** | `./scripts/inspect-golden-unattend.sh output/windows-server-*.qcow2` — rebuild with fixed `sysprep-oobe.xml.tpl`. Do not put `<ProductKey>` in oobeSystem Shell-Setup. |
+| **OOBE product key prompt** | Confirm `SetupDisplayedProductKey` RunSynchronous in Panther `unattend.xml`. Offline fix: `./scripts/repair-oobe-unattend-offline.sh output/windows-server-*.qcow2`. Host check: `make validate-unattend`. |
 | OOBE still running / reboot loop | Increase `BOOT_TEST_WAIT=300` `BOOT_TEST_GUEST_WAIT=900`; do not power off during OOBE. |
 
 Quick recovery without rebuild:

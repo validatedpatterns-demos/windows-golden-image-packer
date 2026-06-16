@@ -8,13 +8,13 @@ Build **Windows Server 2022** and **2025** golden images as **qcow2** disks for 
 |-------------|----------------|
 | Windows Server 2022 / 2025 | `make build` runs both sequentially; each version uses staging dir `.packer-<version>` then promotes to `output/` |
 | Standard Edition (default) | `windows_edition` defaults to `Standard`; Datacenter supported |
-| VirtIO drivers | Installed in phase 2 (WinRM); WinPE uses IDE disk by default |
+| VirtIO drivers | WinPE loads viostor from virtio-win ISO; **virtio-win-gt-x64.msi** at install; boot-start **viostor/vioscsi** verified before promote |
 | QEMU guest agent | `02-install-qemu-guest-agent.ps1` from virtio-win ISO |
 | OpenSSH | `03-configure-openssh.ps1` (Windows capability) |
 | Administrator password | autounattend + `04-set-administrator-password.ps1` |
 | SSH key injection | `ssh_public_keys` / `ssh_public_keys_file` + `05-inject-ssh-keys.ps1` |
 | Disk shrink + optimize | `06-shrink-disk.ps1` (pre-sysprep); post-build `optimize-qcow2.sh` (auto unless `IMAGE_OPTIMIZE=0`) |
-| qcow2 for OpenShift Virt | QEMU builder, VirtIO disk/net, sysprep; **UEFI install** via [docs/uefi-install.md](docs/uefi-install.md) |
+| qcow2 for OpenShift Virt | QEMU builder, VirtIO virtio-blk disk/net, sysprep; **UEFI + virtio-blk** install via [docs/tekton-aligned-build.md](docs/tekton-aligned-build.md) |
 
 ## Prerequisites
 
@@ -29,7 +29,8 @@ On a Linux build host with KVM:
 
 ```bash
 # Fedora/RHEL example
-sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm acl
+sudo dnf install -y packer qemu-kvm edk2-ovmf swtpm acl \
+  libxml2-utils mtools xorriso p7zip genisoimage libguestfs-tools
 
 # One-time: allow KVM for your user (session libvirt default — install disks stay owned by you)
 sudo usermod -aG kvm "$USER"   # log out and back in before make build
@@ -37,6 +38,8 @@ sudo usermod -aG kvm "$USER"   # log out and back in before make build
 # Download virtio-win (optional helper)
 make download-virtio
 ```
+
+`make validate` and CI require **xmllint** (`libxml2-utils`). UEFI virt-install (`efi_boot = true`, default) requires **p7zip** and **genisoimage** for the noprompt ISO repack ([docs/tekton-aligned-build.md](docs/tekton-aligned-build.md)).
 
 Phase 1 virt-install defaults to **`qemu:///session`** when available so the install qcow2 is not left as `nobody:nobody` (no sudo between Phase 1 and Packer). Override with `LIBVIRT_CONNECT=qemu:///system` if you prefer system libvirt; ACLs are applied automatically before install.
 
@@ -55,9 +58,11 @@ Phase 1 virt-install defaults to **`qemu:///session`** when available so the ins
 
    ```bash
    make init
-   make validate      # uses packer/ci.pkrvars.hcl by default
+   make validate      # uses packer/ci.pkrvars.hcl by default (xmllint + validate-unattend.sh)
    make build         # Windows Server 2022, then 2025 (sequential)
    ```
+
+   Default build path: **virt-install UEFI + virtio-blk** (phase 1), then Packer provision + sysprep (phase 2). See [docs/tekton-aligned-build.md](docs/tekton-aligned-build.md) and [docs/uefi-install.md](docs/uefi-install.md).
 
    Set **both** `windows_iso_path_2022` and `windows_iso_path_2025` in `build.pkrvars.hcl` before `make build`.
    One version only: `make build-2022`, `make build-2025`, or `make build BUILD_VERSIONS=2022`.
@@ -89,7 +94,7 @@ See [docs/openshift-virtualization.md](docs/openshift-virtualization.md) for imp
    make boot-test-2025
    ```
 
-Install uses an **IDE** disk during Setup so WinPE can partition without VirtIO drivers; see [docs/install-phases.md](docs/install-phases.md) for the two-phase flow and optional split builds (`make build-install` / `make build-provision-only`). If a long build fails, see [docs/recover-build.md](docs/recover-build.md) (`make recover-provision`).
+Install uses **virtio-blk + OVMF** during Setup (WinPE loads VirtIO from the virtio-win ISO). Legacy **IDE + SeaBIOS** single-pass Packer install is available with `efi_boot = false`; see [docs/install-phases.md](docs/install-phases.md) for split builds (`make build-install` / `make build-provision-only`). If a long build fails, see [docs/recover-build.md](docs/recover-build.md) (`make recover-provision`).
 
 ## Image size and DataVolume sizing
 
@@ -148,10 +153,13 @@ IMAGE_OPTIMIZE=0 make build
 | `ssh_public_keys_file` | `""` | File with one key per line |
 | `output_directory` | `../output` | qcow2 output directory |
 | `disk_size` | `40G` | Build-time virtual size (import minimum); C: extends on first deploy boot if PVC is larger |
-| `install_disk_interface` | `ide` | Disk bus during Setup (`ide` recommended) |
+| `install_disk_interface` | `virtio` | Disk bus during virt-install Setup (`virtio` for OpenShift `disk.bus: virtio`) |
+| `install_firmware` | `uefi` | virt-install firmware (`uefi` or legacy `seabios`) |
 | `install_net_device` | `e1000` | NIC during install/WinRM (`e1000` until VirtIO net is installed) |
-| `efi_boot` | `false` | Packer install firmware; keep `false` on QEMU 10 |
-| `ovmf_code_path` | Fedora OVMF path | OVMF paths when `efi_boot = true` |
+| `efi_boot` | `true` | **Recommended:** virt-install UEFI + virtio-blk, then Packer provision/sysprep. `false`: legacy SeaBIOS single-pass Packer install |
+| `vtpm` | `true` | Emulated TPM 2.0 on UEFI install/provision (requires `swtpm`) |
+| `provision_sysprep_vtpm` | `false` | TPM on the OVMF sysprep VM (off by default; boot-test matches) |
+| `ovmf_code_path` | Fedora OVMF path | OVMF paths when `efi_boot = true` (use 4M firmware on q35) |
 
 Build Datacenter 2025:
 
@@ -164,31 +172,31 @@ cd packer && packer build -var-file=../build.pkrvars.hcl \
 
 ```mermaid
 flowchart LR
-  A[Windows ISO] --> B[Phase 1: IDE disk + autounattend]
-  B --> C[Phase 2: WinRM VirtIO + tools]
+  A[Windows ISO noprompt] --> B[Phase 1: virt-install UEFI virtio-blk]
+  B --> C[Phase 2: WinRM provision]
   C --> D[provisioners]
-  D --> E[VirtIO + QEMU-GA + OpenSSH]
-  E --> F[Password + SSH keys]
+  D --> E[VirtIO verify + QEMU-GA + OpenSSH]
+  E --> F[Locale + OOBE unattend]
   F --> S[06 shrink disk + zero free space]
   S --> G[sysprep generalize]
-  G --> H[qcow2 artifact]
+  G --> H[inspect + qcow2 artifact]
   H --> O[optimize qcow2 on host]
 ```
 
-1. **Unattended install** from ISO with VirtIO storage/network drivers during WinPE.
-2. **WinRM** connects for provisioning scripts.
+1. **Unattended install** (virt-install): OVMF + virtio-blk, autounattend in boot.wim, VirtIO drivers from virtio-win ISO.
+2. **WinRM** connects for provisioning scripts (VirtIO verify, QEMU-GA, OpenSSH, locale, shrink).
 3. **Disk shrink** clears temporaries and zeros free space so the qcow2 can sparsify.
-4. **Sysprep** generalizes the disk for cloning; image shuts down.
-5. Post-processors rename the qcow2, then **optimize** it (`qemu-img convert -c`) unless `IMAGE_OPTIMIZE=0`.
-6. Run **`make image-size`** for the exact DataVolume storage request.
+4. **Sysprep** generalizes the disk; OOBE unattend is restored for first deploy boot; image shuts down.
+5. Post-processors rename the qcow2, run **inspect** gates, then **optimize** (`qemu-img convert -c`) unless `IMAGE_OPTIMIZE=0`.
+6. Run **`make boot-test`** and **`make image-size`** before upload.
 
 ## Repository layout
 
 ```text
 packer/          Packer HCL (QEMU source + build)
-http/            autounattend.xml.tpl
-scripts/         PowerShell provisioning + sysprep
-docs/            OpenShift Virtualization notes
+http/            autounattend + sysprep answer file templates
+scripts/         PowerShell provisioning + sysprep + host inspect/repair
+docs/            OpenShift Virtualization, boot-test, Tekton-aligned build
 example.pkrvars.hcl
 ```
 
@@ -251,8 +259,9 @@ example.pkrvars.hcl
 
 - **WinRM timeout (general)**: ensure the build host can reach the VM on port 5985; try `headless = false` to watch setup.
 - **Wrong edition**: confirm `/IMAGE/NAME` in the ISO matches `locals.edition_image_names` in `packer/locals.pkr.hcl`.
-- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version` (`make build-2025` passes `-var windows_version=2025`). There is no generic `product_key` variable. Omit both to install without a key (evaluation/grace, or activate later via KMS). `scripts/render-autounattend.sh` validates XML with `xmllint` before virt-install. Verify: `VERSION=2022 bash scripts/render-autounattend.sh | xmllint --noout -`.
+- **Product key**: set `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` (see `example.pkrvars.hcl`). The build picks the key for the active `windows_version`. There is no generic `product_key` variable. Keys are applied in the **specialize** pass (`sysprep-generalize.xml.tpl`) and re-applied at first OOBE boot via `slmgr.vbs /ipk` (`sysprep-oobe.xml.tpl`). OOBE skips the product-key page with `SetupDisplayedProductKey=1` (generalize clears the pre-sysprep registry value). Host checks: `make validate-unattend`, `./scripts/inspect-golden-unattend.sh output/windows-server-*.qcow2`. Offline repair on an existing golden: `./scripts/repair-oobe-unattend-offline.sh output/windows-server-*.qcow2`. Do **not** put `<ProductKey>` in oobeSystem Shell-Setup (invalid pass; causes OOBE XML parse errors).
 - **2025 key rejected during setup**: the key must match the edition (`windows_edition` Standard vs Datacenter) and your licensing channel (MAK from VLSC vs KMS GVLK). For KMS clients use the Microsoft GVLK for the edition (for example Server 2025 Standard: `TVRH6-WHNXV-R9WG3-9XRFY-MY832`) and activate against your KMS host after deploy. A 2022 MAK/GVLK will not work on 2025 media. Split install (`make build-install`) requires `VERSION=2025` or it defaults to 2022 and uses `product_key_2022`.
+- **OOBE product key prompt after sysprep**: rebuild with current templates, or run `repair-oobe-unattend-offline.sh` on the golden qcow2. Confirm `SetupDisplayedProductKey` appears in Panther `unattend.xml` RunSynchronous commands.
 - **OVMF not found**: set `ovmf_code_path` / `ovmf_vars_path` for your distribution.
 
 ## License

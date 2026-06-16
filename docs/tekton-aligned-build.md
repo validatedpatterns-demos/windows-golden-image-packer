@@ -42,11 +42,19 @@ install_net_device     = "e1000"
 
 ```bash
 make stage-virtio   # includes virtio-win-gt-x64.msi
-# Requires: p7zip, genisoimage (modify-windows-iso-for-uefi.sh)
+# Requires: p7zip, genisoimage (modify-windows-iso-for-uefi.sh), xmllint (validate-unattend)
+make validate       # CI runs the same checks (libxml2-utils on Ubuntu)
 make build BUILD_VERSIONS=2022
 ./scripts/inspect-golden-qcow2.sh output/windows-server-2022-standard.qcow2
+./scripts/inspect-golden-unattend.sh output/windows-server-2022-standard.qcow2
 make boot-test-2022
 ```
+
+## Product keys and OOBE
+
+- Install / specialize: `product_key_2022` or `product_key_2025` in `build.pkrvars.hcl` → `sysprep-generalize.xml.tpl` (specialize pass).
+- First deploy boot: `sysprep-oobe.xml.tpl` sets `SetupDisplayedProductKey=1` and runs `slmgr.vbs /ipk` (generalize clears licensing state).
+- Host validation: `make validate-unattend`, `./scripts/inspect-golden-unattend.sh`.
 
 ## Retry provision only
 
