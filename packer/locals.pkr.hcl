@@ -94,11 +94,15 @@ locals {
     product_key = local.windows_product_key_xml
   }) : ""
 
+  product_key_oobe_xml = local.windows_product_key_xml != "" ? templatefile("${path.root}/../http/product-key-oobe.xml.tpl", {
+    product_key = local.windows_product_key_xml
+  }) : ""
+
   # Split sysprep answer files: generalize-only for sysprep.exe, oobe-only for Panther on first deploy boot.
   sysprep_generalize_unattend = templatefile("${path.root}/../http/sysprep-generalize.xml.tpl", {})
   sysprep_oobe_unattend = templatefile("${path.root}/../http/sysprep-oobe.xml.tpl", {
-    admin_password = local.admin_password_xml
-    product_key    = local.windows_product_key_xml
+    admin_password      = local.admin_password_xml
+    product_key_oobe_xml = local.product_key_oobe_xml
   })
 
   autounattend_template_vars = {

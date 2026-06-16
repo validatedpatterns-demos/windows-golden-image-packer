@@ -117,6 +117,7 @@ validate_profile() {
   local profile="$1"
   local xml_path="$2"
   python3 - "$profile" "$xml_path" <<'PY'
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -188,12 +189,23 @@ elif profile == "sysprep-oobe":
 
     for needle in (
         "<NetworkLocation>",
-        "<WillShowUI>",
         'wasPassProcessed="',
         "WIN-PACKER",
     ):
         if needle in raw:
             fail(f"contains forbidden value {needle!r}")
+
+    if "<WillShowUI>" in raw:
+        fail("contains WillShowUI (valid in windowsPE UserData only, not oobeSystem Shell-Setup)")
+
+    if re.search(r"<ProductKey>[^<\s]+</ProductKey>", raw):
+        fail(
+            "uses flat ProductKey text (OOBE ignores it; "
+            "use product-key-oobe.xml.tpl nested <Key> block)"
+        )
+
+    if "<ProductKey>" in raw and "<Key>" not in raw:
+        fail("ProductKey is missing nested <Key> (product key OOBE prompt)")
 
     if "<Enabled>true</Enabled>" in raw:
         fail("AutoLogon Enabled=true (install autounattend, not sysprep OOBE)")

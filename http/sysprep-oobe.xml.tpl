@@ -30,9 +30,7 @@
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-%{if product_key != ""~}
-      <ProductKey>${product_key}</ProductKey>
-%{endif~}
+${product_key_oobe_xml}
       <AutoLogon>
         <Enabled>false</Enabled>
       </AutoLogon>

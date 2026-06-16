@@ -69,13 +69,25 @@ validate_oobe_unattend() {
     return 1
   fi
 
-  if printf '%s\n' "$unattend" | grep -q '<NetworkLocation>'; then
-    echo "FAIL: $label contains deprecated NetworkLocation (OOBE parse error on Server)." >&2
+  if printf '%s\n' "$unattend" | grep -q '<WillShowUI>'; then
+    echo "FAIL: $label contains WillShowUI (windowsPE UserData only; invalid in oobeSystem Shell-Setup)." >&2
     return 1
   fi
 
-  if printf '%s\n' "$unattend" | grep -q '<WillShowUI>'; then
-    echo "FAIL: $label contains WillShowUI (valid only in windowsPE UserData, not oobeSystem)." >&2
+  if printf '%s\n' "$unattend" | grep -qE '<ProductKey>[^<[:space:]]+</ProductKey>'; then
+    echo "FAIL: $label uses flat ProductKey text (OOBE ignores it; use <ProductKey><Key>…</Key></ProductKey>)." >&2
+    return 1
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q '<ProductKey>'; then
+    if ! printf '%s\n' "$unattend" | grep -q '<Key>'; then
+      echo "FAIL: $label ProductKey is missing nested <Key> (product key OOBE prompt)." >&2
+      return 1
+    fi
+  fi
+
+  if printf '%s\n' "$unattend" | grep -q '<NetworkLocation>'; then
+    echo "FAIL: $label contains deprecated NetworkLocation (OOBE parse error on Server)." >&2
     return 1
   fi
 
