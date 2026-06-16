@@ -7,6 +7,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Ephemeral renders must not create output/ (packer validate requires output_directory absent).
+if [[ -z "${BUILD_TMPDIR:-}" ]]; then
+  BUILD_TMPDIR="${TMPDIR:-/tmp}/windows-golden-image-packer-validate"
+fi
+export BUILD_TMPDIR
 # shellcheck source=scripts/build-temp.sh
 source "$ROOT/scripts/build-temp.sh"
 PACKER_DIR="$ROOT/packer"
@@ -22,6 +27,7 @@ Environment:
   VAR_FILE            Packer var file for rendering (default: build.pkrvars.hcl)
   VALIDATE_VAR_FILE   Fallback var file when VAR_FILE is missing (default: packer/ci.pkrvars.hcl)
   VALIDATE_VERSIONS   Space-separated Windows versions to check (default: "2022 2025")
+  BUILD_TMPDIR        Temp render directory (default: under \$TMPDIR, not output/)
   PACKER              Override packer binary (default: resolve-packer.sh)
 
 Requires: packer (after packer init), xmllint, python3
