@@ -67,6 +67,7 @@ if [[ ! -f "$render_var_file" ]]; then
   echo "validate-unattend: no var file found (tried VAR_FILE and VALIDATE_VAR_FILE)" >&2
   exit 1
 fi
+render_var_file="$(readlink -f "$render_var_file")"
 
 render_packer_local() {
   local local_expr="$1"
@@ -79,7 +80,7 @@ render_packer_local() {
   fi
 
   cd "$PACKER_DIR"
-  "$PACKER_BIN" console -var-file="../$(basename "$render_var_file")" "${extra_vars[@]}" . <<EOF | sed -n '/^<?xml/,/^<\/unattend>/p'
+  "$PACKER_BIN" console -var-file="$render_var_file" "${extra_vars[@]}" . <<EOF | sed -n '/^<?xml/,/^<\/unattend>/p'
 ${local_expr}
 EOF
 }
@@ -261,7 +262,9 @@ check_one() {
   local efi_boot="${5:-}"
 
   local rendered
-  rendered="$(render_to_file "$label" "$local_expr" "$version" "$efi_boot")"
+  if ! rendered="$(render_to_file "$label" "$local_expr" "$version" "$efi_boot")"; then
+    return 1
+  fi
   validate_profile "$profile" "$rendered"
 }
 
