@@ -73,7 +73,7 @@ validate-unattend: init
 	./scripts/validate-unattend.sh
 
 build: stage-virtio init
-	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
+	@test -f drivers/viostor/2k22/amd64/viostor.sys && test -f drivers/viostor/2k25/amd64/viostor.sys || (echo "Run: STAGE_FORCE=1 make stage-virtio (need 2k22 and 2k25 trees)" >&2; exit 1)
 	@if [ -d drivers/viostor/2k12 ]; then echo "drivers/ is bloated (old full virtio-win tree). Run: STAGE_FORCE=1 make stage-virtio" >&2; exit 1; fi
 	@set -e; for v in $(BUILD_VERSIONS); do \
 	  rm -rf "output/.packer-$$v" "packer/output/.packer-$$v"; \
@@ -93,7 +93,9 @@ build-versions:
 # One Windows Server version; does not wipe other versions already in output/
 build-version:
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025" >&2; exit 1)
-	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
+	@osdir=$$( [ "$(VERSION)" = "2025" ] && echo 2k25 || echo 2k22 ); \
+	test -f drivers/viostor/$$osdir/amd64/viostor.sys || \
+	  (echo "Run: STAGE_FORCE=1 make stage-virtio (missing drivers/viostor/$$osdir)" >&2; exit 1)
 	@efi="$$(./scripts/read-pkrvar.sh efi_boot $(VAR_FILE) true)"; \
 	if [ "$$efi" = "true" ]; then \
 	  $(MAKE) build-version-uefi VERSION=$(VERSION); \
@@ -162,7 +164,9 @@ build-version-uefi:
 
 build-install: stage-virtio init
 	@test -n "$(VERSION)" || (echo "Set VERSION=2022 or VERSION=2025 (install uses product_key_2022 or product_key_2025 for that version)" >&2; exit 1)
-	@test -f drivers/viostor/2k22/amd64/viostor.sys || (echo "Run: make stage-virtio" >&2; exit 1)
+	@osdir=$$( [ "$(VERSION)" = "2025" ] && echo 2k25 || echo 2k22 ); \
+	test -f drivers/viostor/$$osdir/amd64/viostor.sys || \
+	  (echo "Run: STAGE_FORCE=1 make stage-virtio (missing drivers/viostor/$$osdir)" >&2; exit 1)
 	@BUILD_SCHEDULE_LOG="output/$(PACKER_STAGING)/build-schedule.log" ./scripts/print-build-schedule.sh install-only; \
 	echo ""
 	rm -rf packer/output packer/output/packer-win* packer/packer_cache 2>/dev/null || true

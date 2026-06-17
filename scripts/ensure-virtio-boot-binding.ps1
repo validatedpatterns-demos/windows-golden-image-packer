@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # virtio-win MSI (Phase 1) installs drivers and sets Start=0 but not CriticalDeviceDatabase.
-# Register CDD + sync control sets without re-staging in-use driver binaries.
+# Server 2025 may leave service keys without viostor.sys in System32\drivers — stage from
+# WinRM-uploaded drivers/ when missing, then register CDD and sync control sets.
 $ErrorActionPreference = 'Stop'
 
 $installScript = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'
@@ -10,6 +11,20 @@ if (-not (Test-Path -LiteralPath $installScript)) {
     throw "Missing $installScript"
 }
 . $installScript -SkipMain
+
+$virtioOsDir = Get-TargetVirtioOsDir
+$mediaRoot = Find-VirtioMediaRoot -OsDir $virtioOsDir
+$virtioOsDir = Get-VirtioOsDir -MediaRoot $mediaRoot -OsDir $virtioOsDir
+
+$viostorSys = Join-Path $env:SystemRoot 'System32\drivers\viostor.sys'
+$vioscsiSys = Join-Path $env:SystemRoot 'System32\drivers\vioscsi.sys'
+if (-not (Test-Path -LiteralPath $viostorSys) -or -not (Test-Path -LiteralPath $vioscsiSys)) {
+    Write-Host "Boot driver binaries missing; staging from $mediaRoot (OS dir: $virtioOsDir)"
+    $viostorInf = Join-Path $mediaRoot "viostor\$virtioOsDir\amd64\viostor.inf"
+    $vioscsiInf = Join-Path $mediaRoot "vioscsi\$virtioOsDir\amd64\vioscsi.inf"
+    Ensure-BootDriverStaged -ServiceName 'viostor' -SysFileName 'viostor.sys' -InfPath $viostorInf
+    Ensure-BootDriverStaged -ServiceName 'vioscsi' -SysFileName 'vioscsi.sys' -InfPath $vioscsiInf
+}
 
 foreach ($svc in @('viostor', 'vioscsi')) {
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"

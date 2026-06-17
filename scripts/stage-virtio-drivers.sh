@@ -23,9 +23,11 @@ if [[ ! -f "$ISO" ]]; then
 fi
 
 drivers_ready() {
-  [[ -f "$DRIVERS/viostor/2k22/amd64/viostor.sys" ]] && \
-    [[ -f "$DRIVERS/NetKVM/2k22/amd64/netkvm.sys" ]] && \
-    [[ -f "$DRIVERS/guest-agent/qemu-ga-x86_64.msi" ]] && \
+  for osdir in $STAGE_OS_DIRS; do
+    [[ -f "$DRIVERS/viostor/$osdir/amd64/viostor.sys" ]] || return 1
+    [[ -f "$DRIVERS/NetKVM/$osdir/amd64/netkvm.sys" ]] || return 1
+  done
+  [[ -f "$DRIVERS/guest-agent/qemu-ga-x86_64.msi" ]] && \
     [[ -f "$DRIVERS/virtio-win-gt-x64.msi" ]]
 }
 

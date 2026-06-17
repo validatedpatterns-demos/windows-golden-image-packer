@@ -58,8 +58,12 @@ if [[ ! -f "$WINDOWS_ISO" ]]; then
 fi
 WINDOWS_ISO="$(readlink -f "$WINDOWS_ISO")"
 
-if [[ ! -f "$ROOT/drivers/viostor/2k22/amd64/viostor.sys" ]]; then
-  echo "VirtIO drivers not staged. Run: make stage-virtio" >&2
+virtio_os_dir=2k22
+if [[ "$VERSION" == "2025" ]]; then
+  virtio_os_dir=2k25
+fi
+if [[ ! -f "$ROOT/drivers/viostor/$virtio_os_dir/amd64/viostor.sys" ]]; then
+  echo "VirtIO drivers not staged for $virtio_os_dir. Run: STAGE_FORCE=1 make stage-virtio" >&2
   exit 1
 fi
 if [[ ! -f "$ROOT/drivers/virtio-win-gt-x64.msi" ]]; then
