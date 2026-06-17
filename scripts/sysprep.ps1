@@ -3,7 +3,8 @@
 
 # Generalize the image for cloning in OpenShift Virtualization (KubeVirt).
 param(
-    [switch]$ProvisionerRun
+    [switch]$ProvisionerRun,
+    [switch]$Worker
 )
 
 $ErrorActionPreference = 'Stop'
@@ -624,101 +625,77 @@ function Repair-GeneralizedBcdStore {
     $global:LASTEXITCODE = 0
 }
 
-try {
-    $clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
-    if (Test-Path $clearScript) {
-        & $clearScript
+function Get-SysprepWorkerDelaySeconds {
+    if ($env:SYSPREP_WORKER_DELAY_SECONDS -match '^\d+$') {
+        return [int]$env:SYSPREP_WORKER_DELAY_SECONDS
     }
-    else {
-        Write-Warning "clear-autologon.ps1 not found beside sysprep.ps1; image may autologon on first OpenShift boot"
+    return 30
+}
+
+function Start-SysprepWorkerProcess {
+    # Do not Start-Process the worker immediately — sysprep /generalize breaks WinRM while Packer
+    # is still tearing down the inline provisioner script (401 on winrmcp cleanup). Schedule the
+    # worker so Packer can exit WinRM before generalize runs.
+    New-Item -ItemType Directory -Path $goldenData -Force | Out-Null
+    $workerLog = Join-Path $goldenData 'sysprep-worker.log'
+    $taskName = 'GoldenImageSysprepWorker'
+    $delaySec = Get-SysprepWorkerDelaySeconds
+    $runAt = (Get-Date).AddSeconds($delaySec)
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        schtasks.exe /Delete /TN $taskName /F | Out-Null
+    }
+    finally {
+        $ErrorActionPreference = $prev
     }
 
-    # SeaBIOS provision pass runs sysprep before OVMF reboot; verify ESP only (not firmware type).
-    Test-EspPresent
+    $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $taskArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker"
+    $action = New-ScheduledTaskAction -Execute $psExe -Argument $taskArgs
+    $trigger = New-ScheduledTaskTrigger -Once -At $runAt
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+
+    Write-Host "Scheduled sysprep worker as SYSTEM in ${delaySec}s (task: $taskName; log: $workerLog)"
+    Write-Host "Run at: $($runAt.ToString('o')) (Packer must finish WinRM teardown before generalize)"
+}
+
+function Invoke-SysprepGeneralizeAndFinalize {
+    if ($Worker) {
+        $taskName = 'GoldenImageSysprepWorker'
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        }
+        finally {
+            $ErrorActionPreference = $prev
+        }
+    }
 
     $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
     if (-not (Test-Path $sysprep)) {
         throw "Sysprep not found at $sysprep"
     }
 
-    foreach ($dir in @($panther, $sysprepPanther)) {
-        if (-not (Test-Path $dir)) { continue }
-        Get-ChildItem -Path $dir -Filter 'unattend*.xml' -ErrorAction SilentlyContinue |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        foreach ($name in @('setupact.log', 'setuperr.log')) {
-            $path = Join-Path $dir $name
-            if (Test-Path $path) {
-                Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-
-    Test-SysprepNotAlreadyGeneralized
-
-    $sysprepStatus = 'HKLM:\SYSTEM\Setup\Status\SysprepStatus'
-    if (Test-Path $sysprepStatus) {
-        Remove-Item -Path $sysprepStatus -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    if (-not (Test-Path $generalizeUnattend)) {
-        throw "Missing $generalizeUnattend (specialize/generalize only - no oobeSystem)"
-    }
-    $oobeSource = Resolve-OobeUnattendPath
-
-    [void][xml](Get-Content -Path $generalizeUnattend -Raw)
-    [void][xml](Get-Content -Path $oobeSource -Raw)
-
-    Restore-OobeUnattend -Reason 'before sysprep generalize'
-
-    if (-not (Test-Path $oobeUnattendPersistent)) {
-        throw "Missing $oobeUnattendPersistent (configure-oobe-locale.ps1 must run before sysprep)"
-    }
-
-    foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc', 'edgeupdate', 'edgeupdatem')) {
-        $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-        if ($svc -and $svc.Status -eq 'Running') {
-            Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    Remove-PhantomVirtioBootDevices
-
-    . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
-    if (Get-Command Test-EdgeSysprepReady -ErrorAction SilentlyContinue) {
-        $ready, $readyMsg = Test-EdgeSysprepReady
-        if ($ready) {
-            Write-Host "Edge sysprep-ready: $readyMsg (skipping full Edge reprovision)"
-            Stop-EdgeForSysprep
-        }
-        else {
-            Write-Host "Edge not sysprep-ready ($readyMsg); running full Edge prep..."
-            Remove-SysprepBlockingAppx
-        }
-    }
-    else {
-        Write-Host 'Ensuring Edge is provisioned for all users and stopping browser processes...'
-        Remove-SysprepBlockingAppx
-    }
-
-    Stage-VirtioDriversForSysprep
-
     $installVirtio = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'
     if (-not (Test-Path -LiteralPath $installVirtio)) {
         throw "Missing $installVirtio"
     }
-    . $installVirtio -SkipMain
-    # The pre-sysprep restart can still re-add StartOverride even after virtio restore.
-    Remove-VirtioBootStartOverrideAllControlSets
 
     $unattend = $generalizeUnattend
     # /quit: do not reboot or shut down after generalize — post-sysprep virtio restore and OOBE
-    # unattend must run while WinRM is still up. Without /quit, sysprep calls InitiateSystemShutdownEx
-    # on success and Packer sees exit 16001 before restore-virtio-boot-after-sysprep.ps1 runs.
+    # unattend must run on the guest before shutdown. Without /quit, sysprep shuts down before
+    # restore-virtio-boot-after-sysprep.ps1 runs.
     $timeoutMin = 45
     if ($env:SYSPREP_TIMEOUT_MINUTES -match '^\d+$') {
         $timeoutMin = [int]$env:SYSPREP_TIMEOUT_MINUTES
     }
-    # /quiet suppresses confirmation dialogs that can block sysprep headless under QEMU.
     $sysprepArgs = @('/generalize', '/oobe', '/mode:vm', '/quiet', '/quit', "/unattend:$unattend")
     Write-Host ('Running sysprep ' + ($sysprepArgs -join ' ') + " (timeout ${timeoutMin}m, setupact.log tailed every 15s while running)")
 
@@ -740,7 +717,6 @@ try {
         }
     }
 
-    # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
     Restore-OobeUnattend -Reason 'after sysprep generalize'
 
     $restoreVirtio = Join-Path $PSScriptRoot 'restore-virtio-boot-after-sysprep.ps1'
@@ -749,13 +725,10 @@ try {
     }
     & $restoreVirtio
 
-    # Generalize can clone a control set without VirtIO keys; re-sync every numbered hive.
     if (-not (Get-Command Sync-VirtioBootRegistryToAllControlSets -ErrorAction SilentlyContinue)) {
         . $installVirtio -SkipMain
     }
     Sync-VirtioBootRegistryToAllControlSets
-
-    # bcdboot / generalize can reintroduce StartOverride on Select\Default (ControlSet001).
     Remove-VirtioBootStartOverrideAllControlSets
 
     $verifyVirtio = Join-Path $PSScriptRoot 'verify-virtio-boot-drivers.ps1'
@@ -763,26 +736,128 @@ try {
         throw "Missing $verifyVirtio"
     }
     & $verifyVirtio -AllControlSets
-
-    # Windows may rewrite StartOverride during shutdown when the build VM last booted SATA/IDE.
     Remove-VirtioBootStartOverrideAllControlSets
-
-    # Rebuild BCD last: bcdboot can leave orphan winload objects until host-side offline cleanup.
     Repair-GeneralizedBcdStore
-
-    # Fast registry only — after virtio/BCD. slmgr runs on first deploy boot (sysprep-oobe.xml).
     Set-PostSysprepProductKeyOobe
 
     $global:LASTEXITCODE = 0
-    # Generalize breaks WinRM before Packer shutdown; power off locally. OVMF builds use
-    # wait-packer-qemu-exit.sh on the host so Packer skips WinRM shutdown_command.
     Stop-OrphanSysprepShutdownGuards
     Invoke-GuestShutdown
     exit 0
+}
+
+try {
+    if ($Worker) {
+        New-Item -ItemType Directory -Path $goldenData -Force | Out-Null
+        $workerLog = Join-Path $goldenData 'sysprep-worker.log'
+        if (Test-Path -LiteralPath $workerLog) {
+            Remove-Item -LiteralPath $workerLog -Force -ErrorAction SilentlyContinue
+        }
+        Start-Transcript -Path $workerLog -Force | Out-Null
+        Write-Host "Sysprep worker started at $(Get-Date -Format o)"
+    }
+
+    if (-not $Worker) {
+        $clearScript = Join-Path $PSScriptRoot 'clear-autologon.ps1'
+        if (Test-Path $clearScript) {
+            & $clearScript
+        }
+        else {
+            Write-Warning "clear-autologon.ps1 not found beside sysprep.ps1; image may autologon on first OpenShift boot"
+        }
+
+        Test-EspPresent
+
+        $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
+        if (-not (Test-Path $sysprep)) {
+            throw "Sysprep not found at $sysprep"
+        }
+
+        foreach ($dir in @($panther, $sysprepPanther)) {
+            if (-not (Test-Path $dir)) { continue }
+            Get-ChildItem -Path $dir -Filter 'unattend*.xml' -ErrorAction SilentlyContinue |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            foreach ($name in @('setupact.log', 'setuperr.log')) {
+                $path = Join-Path $dir $name
+                if (Test-Path $path) {
+                    Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        Test-SysprepNotAlreadyGeneralized
+
+        $sysprepStatus = 'HKLM:\SYSTEM\Setup\Status\SysprepStatus'
+        if (Test-Path $sysprepStatus) {
+            Remove-Item -Path $sysprepStatus -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-Path $generalizeUnattend)) {
+            throw "Missing $generalizeUnattend (specialize/generalize only - no oobeSystem)"
+        }
+        $oobeSource = Resolve-OobeUnattendPath
+
+        [void][xml](Get-Content -Path $generalizeUnattend -Raw)
+        [void][xml](Get-Content -Path $oobeSource -Raw)
+
+        Restore-OobeUnattend -Reason 'before sysprep generalize'
+
+        if (-not (Test-Path $oobeUnattendPersistent)) {
+            throw "Missing $oobeUnattendPersistent (configure-oobe-locale.ps1 must run before sysprep)"
+        }
+
+        foreach ($name in @('wuauserv', 'UsoSvc', 'bits', 'dosvc', 'edgeupdate', 'edgeupdatem')) {
+            $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') {
+                Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Remove-PhantomVirtioBootDevices
+
+        . (Join-Path $PSScriptRoot 'remove-sysprep-blocking-appx.ps1')
+        if (Get-Command Test-EdgeSysprepReady -ErrorAction SilentlyContinue) {
+            $ready, $readyMsg = Test-EdgeSysprepReady
+            if ($ready) {
+                Write-Host "Edge sysprep-ready: $readyMsg (skipping full Edge reprovision)"
+                Stop-EdgeForSysprep
+            }
+            else {
+                Write-Host "Edge not sysprep-ready ($readyMsg); running full Edge prep..."
+                Remove-SysprepBlockingAppx
+            }
+        }
+        else {
+            Write-Host 'Ensuring Edge is provisioned for all users and stopping browser processes...'
+            Remove-SysprepBlockingAppx
+        }
+
+        Stage-VirtioDriversForSysprep
+
+        $installVirtio = Join-Path $PSScriptRoot '01-install-virtio-drivers.ps1'
+        if (-not (Test-Path -LiteralPath $installVirtio)) {
+            throw "Missing $installVirtio"
+        }
+        . $installVirtio -SkipMain
+        Remove-VirtioBootStartOverrideAllControlSets
+    }
+
+    if ($ProvisionerRun -and -not $Worker) {
+        Start-SysprepWorkerProcess
+        $global:LASTEXITCODE = 0
+        exit 0
+    }
+
+    Invoke-SysprepGeneralizeAndFinalize
 }
 catch {
     Save-SysprepDiagnostics $_.Exception.Message
     Write-SysprepDiagnosticLogs
     Write-Host "sysprep.ps1 failed: $($_.Exception.Message)"
     exit 1
+}
+finally {
+    if ($Worker) {
+        Stop-Transcript | Out-Null
+    }
 }

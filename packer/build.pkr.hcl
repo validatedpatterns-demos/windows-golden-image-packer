@@ -113,9 +113,12 @@ build {
   }
 
   provisioner "powershell" {
-    environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
-    scripts          = ["${path.root}/../scripts/sysprep.ps1"]
-    skip_clean         = true
+    environment_vars = concat(local.provision_env_vars, [
+      "SYSPREP_PROVISIONER_RUN=1",
+      "SYSPREP_WORKER_DELAY_SECONDS=45",
+    ])
+    skip_clean = true
+    inline     = ["& 'C:/Windows/Temp/sysprep.ps1'"]
   }
 
   post-processor "shell-local" {
@@ -123,6 +126,7 @@ build {
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}\" \"${local.output_image_name}\"",
       "VERSION=${var.windows_version} VAR_FILE=${abspath("../build.pkrvars.hcl")} bash \"${path.root}/../scripts/repair-oobe-unattend-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "bash \"${path.root}/../scripts/inspect-golden-unattend.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
+      "bash \"${path.root}/../scripts/verify-sysprep-succeeded-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]
   }

@@ -154,10 +154,15 @@ build-version-uefi:
 	echo "=== Phase 2/2: Packer provision + sysprep (OVMF, virtio-blk) ==="; \
 	echo "  Install disk: $$install"; \
 	echo ""; \
+	./scripts/verify-provision-base-image.sh "$$install"; \
+	provision_pass_iso="$$staging/provision-pass.iso"; \
+	VERSION="$(VERSION)" OUT="$$provision_pass_iso" ./scripts/create-provision-pass-iso.sh; \
+	provision_pass_iso="$$(readlink -f "$$provision_pass_iso")"; \
 	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 		-var windows_version=$(VERSION) -var windows_edition=$(WINDOWS_EDITION) \
 		-var base_image_path=$$install \
 		-var output_directory=../output/$(PACKER_STAGING)/$(PACKER_WORK_SUBDIR) \
+		-var provision_pass_iso=$$provision_pass_iso \
 		$(PACKER_ONLY_PROVISION) .; \
 	cd $(CURDIR); \
 	./scripts/promote-golden-output.sh "$(VERSION)" "$(PACKER_STAGING)"
@@ -193,7 +198,11 @@ build-provision-only: stage-virtio init
 	fi; \
 	BUILD_SCHEDULE_LOG="$$staging_dir/build-schedule.log" ./scripts/print-build-schedule.sh provision-gpt; \
 	echo ""; \
-	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir"; \
+	./scripts/verify-provision-base-image.sh "$$base"; \
+	provision_pass_iso="$$staging_dir/provision-pass.iso"; \
+	VERSION="$$version" OUT="$$provision_pass_iso" ./scripts/create-provision-pass-iso.sh; \
+	provision_pass_iso="$$(readlink -f "$$provision_pass_iso")"; \
+	prov_args="-var base_image_path=$$base -var output_directory=$$work_dir -var provision_pass_iso=$$provision_pass_iso"; \
 	if [ -n "$$version" ]; then prov_args="$$prov_args -var windows_version=$$version"; fi; \
 	cd $(PACKER_DIR) && $(PACKER) build -force -on-error=$(PACKER_ON_ERROR) $(VAR_FILE_FLAG) \
 	  -var windows_edition=$(WINDOWS_EDITION) \

@@ -152,6 +152,13 @@ locals {
   # OVMF pflash must stay qcow2 (not raw), otherwise UEFI can loop at high CPU.
   gpt_ovmf_machine = "type=q35,accel=${var.qemu_accelerator},smm=on"
 
+  # Pass 2: SATA CD-ROM (ich9-ahci), same bus as virt-install PROVISION ISO — IDE is not visible on virtio-only images.
+  provision_pass_cd_qemuargs = var.provision_pass_iso != "" ? [
+    ["-device", "ich9-ahci,id=ahci"],
+    ["-drive", "file=${var.provision_pass_iso},if=none,id=provisioncd,readonly=on,media=cdrom"],
+    ["-device", "ide-cd,bus=ahci.0,drive=provisioncd"],
+  ] : []
+
   gpt_ovmf_qemuargs = concat(
     [
       ["-machine", local.gpt_ovmf_machine],
@@ -163,6 +170,7 @@ locals {
       ["-device", "virtio-blk-pci,drive=disk0,bootindex=1,write-cache=on"],
       ["-device", "${var.install_net_device},netdev=user.0,bootindex=5"],
     ],
+    local.provision_pass_cd_qemuargs,
     var.provision_sysprep_vtpm ? [["-device", "tpm-tis,tpmdev=tpm0"]] : []
   )
 

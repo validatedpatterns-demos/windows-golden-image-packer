@@ -41,6 +41,7 @@ copy_if_exists /Windows/System32/Sysprep/Panther/setupact.log sysprep-setupact.l
 copy_if_exists /ProgramData/GoldenImage/sysprep-diagnostics.log golden-sysprep-diagnostics.log
 copy_if_exists /Windows/Panther/sysprep-diagnostics.log panther-sysprep-diagnostics.log
 copy_if_exists /ProgramData/GoldenImage/prepare-for-sysprep.log prepare-for-sysprep.log
+copy_if_exists /ProgramData/GoldenImage/sysprep-worker.log sysprep-worker.log
 copy_if_exists /ProgramData/GoldenImage/sysprep-oobe.xml golden-sysprep-oobe.xml
 copy_if_exists /ProgramData/GoldenImage/extend-system-partition.log golden-extend-system-partition.log
 copy_if_exists /Windows/Temp/configure-oobe-locale.log temp-configure-oobe-locale.log

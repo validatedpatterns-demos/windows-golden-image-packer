@@ -29,7 +29,7 @@ source "qemu" "from_install_gpt" {
   efi_firmware_vars = var.ovmf_vars_path
   vtpm              = var.provision_sysprep_vtpm
 
-  boot_wait    = "45s"
+  boot_wait    = "90s"
   boot_command = []
   headless     = true
   display      = "none"
@@ -51,9 +51,15 @@ build {
   name    = "windows-golden-provision"
   sources = ["source.qemu.from_install_gpt"]
 
+  # One small script upload, then copy scripts+drivers from PROVISION CD (SATA, like pass 1).
   provisioner "file" {
-    destination = "C:/Windows/Temp/"
-    source      = "${path.root}/../scripts/"
+    source      = "${path.root}/../scripts/stage-provision-from-cd.ps1"
+    destination = "C:/Windows/Temp/stage-provision-from-cd.ps1"
+  }
+
+  provisioner "powershell" {
+    pause_before = "30s"
+    inline       = ["& 'C:/Windows/Temp/stage-provision-from-cd.ps1'"]
   }
 
   provisioner "file" {
@@ -66,31 +72,10 @@ build {
     destination = "C:/Windows/Temp/sysprep-oobe.xml"
   }
 
-  provisioner "file" {
-    source      = "${path.root}/../http/oobe-info-defaults.xml"
-    destination = "C:/Windows/Temp/oobe-info-defaults.xml"
-  }
-
-  provisioner "file" {
-    destination = "C:/Windows/Temp/"
-    source      = "${path.root}/../drivers"
-  }
-
   provisioner "powershell" {
     environment_vars = local.provision_env_vars
-    scripts = [
-      "${path.root}/../scripts/verify-uefi-boot.ps1",
-      "${path.root}/../scripts/ensure-virtio-boot-binding.ps1",
-      "${path.root}/../scripts/verify-virtio-boot-drivers.ps1",
-      "${path.root}/../scripts/02-install-qemu-guest-agent.ps1",
-      "${path.root}/../scripts/03-configure-openssh.ps1",
-      "${path.root}/../scripts/04-set-administrator-password.ps1",
-      "${path.root}/../scripts/05-inject-ssh-keys.ps1",
-      "${path.root}/../scripts/configure-oobe-locale.ps1",
-      "${path.root}/../scripts/10-ensure-edge-for-sysprep.ps1",
-      "${path.root}/../scripts/06-shrink-disk.ps1",
-      "${path.root}/../scripts/09-prepare-for-sysprep.ps1",
-    ]
+    # Scripts already on guest from CD; inline avoids winrmcp re-upload per script.
+    inline = ["& 'C:/Windows/Temp/run-provision-pass.ps1'"]
   }
 
   provisioner "windows-restart" {
@@ -98,10 +83,14 @@ build {
   }
 
   provisioner "powershell" {
-    environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
-    scripts          = ["${path.root}/../scripts/sysprep.ps1"]
-    # Generalize breaks WinRM; skip remote script cleanup (401 invalid content type).
-    skip_clean         = true
+    environment_vars = concat(local.provision_env_vars, [
+      "SYSPREP_PROVISIONER_RUN=1",
+      "SYSPREP_WORKER_DELAY_SECONDS=45",
+    ])
+    # Script already on guest from CD staging; inline avoids a second winrmcp upload.
+    # Worker is scheduled ~45s later so Packer can tear down WinRM before generalize.
+    skip_clean = true
+    inline     = ["& 'C:/Windows/Temp/sysprep.ps1'"]
   }
 
   provisioner "shell-local" {
@@ -120,6 +109,7 @@ build {
       "bash \"${path.root}/../scripts/fix-bcd-orphan-winload-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "VERSION=${var.windows_version} VAR_FILE=${abspath("../build.pkrvars.hcl")} bash \"${path.root}/../scripts/repair-oobe-unattend-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "bash \"${path.root}/../scripts/inspect-golden-unattend.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
+      "bash \"${path.root}/../scripts/verify-sysprep-succeeded-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "INSPECT_VIRTIO_STRICT=1 bash \"${path.root}/../scripts/inspect-golden-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]

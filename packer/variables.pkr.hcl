@@ -171,6 +171,12 @@ variable "base_image_path" {
   default     = ""
 }
 
+variable "provision_pass_iso" {
+  type        = string
+  description = "Pass 2 only: PROVISION ISO with scripts/ and drivers/ for CD staging (avoids WinRM bulk upload). Required when base_image_path is set."
+  default     = ""
+}
+
 variable "install_net_device" {
   type        = string
   description = "NIC model during install and provisioning. e1000 works without VirtIO network drivers in WinPE."
