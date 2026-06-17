@@ -65,10 +65,9 @@ function Restore-OobeUnattend {
 }
 
 function Set-PostSysprepProductKeyOobe {
-    param(
-        [string]$GeneralizeUnattendPath
-    )
-
+    # Registry + UnattendPasses only. Do not run slmgr here — generalize invalidates WinRM and
+    # Packer's powershell provisioner fails with 401 on script cleanup. Product key is applied in
+    # sysprep-generalize.xml (specialize pass) and again on first deploy boot (sysprep-oobe.xml).
     foreach ($path in @(
             'HKLM:\SYSTEM\Setup\Status\SysprepStatus',
             'HKLM:\SYSTEM\Setup\Status\UnattendPasses'
@@ -85,24 +84,6 @@ function Set-PostSysprepProductKeyOobe {
     }
     Set-ItemProperty -LiteralPath $oobeReg -Name 'SetupDisplayedProductKey' -Value 1 -Type DWord -Force
     Write-Host 'Set SetupDisplayedProductKey=1 (skip OOBE product key page after generalize)'
-
-    if (-not (Test-Path -LiteralPath $GeneralizeUnattendPath)) {
-        Write-Warning "Cannot read product key from $GeneralizeUnattendPath"
-        return
-    }
-
-    $genXml = Get-Content -Path $GeneralizeUnattendPath -Raw
-    if ($genXml -match '<ProductKey>([^<]+)</ProductKey>') {
-        $productKey = $Matches[1].Trim()
-        if ($productKey) {
-            $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
-            Write-Host 'Installing product key via slmgr before shutdown...'
-            & cscript.exe //nologo $slmgr /ipk $productKey 2>&1 | Out-Host
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "slmgr /ipk exited $LASTEXITCODE"
-            }
-        }
-    }
 }
 
 function Get-LogTail {
@@ -761,7 +742,6 @@ try {
 
     # sysprep.exe leaves sysprep-generalize.xml in Panther; first deploy boot needs sysprep-oobe.xml.
     Restore-OobeUnattend -Reason 'after sysprep generalize'
-    Set-PostSysprepProductKeyOobe -GeneralizeUnattendPath $generalizeUnattend
 
     $restoreVirtio = Join-Path $PSScriptRoot 'restore-virtio-boot-after-sysprep.ps1'
     if (-not (Test-Path -LiteralPath $restoreVirtio)) {
@@ -789,6 +769,9 @@ try {
 
     # Rebuild BCD last: bcdboot can leave orphan winload objects until host-side offline cleanup.
     Repair-GeneralizedBcdStore
+
+    # Fast registry only — after virtio/BCD. slmgr runs on first deploy boot (sysprep-oobe.xml).
+    Set-PostSysprepProductKeyOobe
 
     $global:LASTEXITCODE = 0
     # Generalize breaks WinRM before Packer shutdown; power off locally. OVMF builds use

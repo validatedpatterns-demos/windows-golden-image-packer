@@ -115,6 +115,7 @@ build {
   provisioner "powershell" {
     environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
     scripts          = ["${path.root}/../scripts/sysprep.ps1"]
+    skip_clean         = true
   }
 
   post-processor "shell-local" {

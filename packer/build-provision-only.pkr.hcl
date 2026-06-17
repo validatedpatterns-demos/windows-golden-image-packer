@@ -100,6 +100,8 @@ build {
   provisioner "powershell" {
     environment_vars = concat(local.provision_env_vars, ["SYSPREP_PROVISIONER_RUN=1"])
     scripts          = ["${path.root}/../scripts/sysprep.ps1"]
+    # Generalize breaks WinRM; skip remote script cleanup (401 invalid content type).
+    skip_clean         = true
   }
 
   provisioner "shell-local" {
