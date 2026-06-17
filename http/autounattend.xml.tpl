@@ -108,6 +108,7 @@ ${specialize_post_install_xml}
 ${specialize_winrm_xml}
   </settings>
   <settings pass="oobeSystem">
+${oobe_skip_product_key_runsync}
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
       publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <InputLocale>0409:00000409</InputLocale>

@@ -120,6 +120,8 @@ build {
   post-processor "shell-local" {
     inline = [
       "bash \"${path.root}/../scripts/finalize-packer-output.sh\" \"${abspath(var.output_directory)}\" \"${local.vm_name}\" \"${local.output_image_name}\"",
+      "VERSION=${var.windows_version} VAR_FILE=${abspath("../build.pkrvars.hcl")} bash \"${path.root}/../scripts/repair-oobe-unattend-offline.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
+      "bash \"${path.root}/../scripts/inspect-golden-unattend.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"",
       "if [ \"$${IMAGE_OPTIMIZE:-1}\" = \"1\" ]; then bash \"${path.root}/../scripts/optimize-qcow2.sh\" \"${abspath(var.output_directory)}/${local.output_image_name}\"; fi",
     ]
   }

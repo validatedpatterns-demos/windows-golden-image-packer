@@ -110,6 +110,7 @@ locals {
     virtio_driver_paths_xml      = local.virtio_driver_paths_xml
     product_key_xml              = local.product_key_xml
     product_key                  = local.windows_product_key_xml
+    oobe_skip_product_key_runsync  = file("${path.root}/../http/oobe-skip-product-key-runsync.xml")
     include_winpe_virtio_drivers = local.include_winpe_virtio_drivers
     specialize_winrm_xml          = local.specialize_winrm_xml
     specialize_post_install_xml   = local.specialize_post_install_xml

@@ -69,6 +69,16 @@ function Set-PostSysprepProductKeyOobe {
         [string]$GeneralizeUnattendPath
     )
 
+    foreach ($path in @(
+            'HKLM:\SYSTEM\Setup\Status\SysprepStatus',
+            'HKLM:\SYSTEM\Setup\Status\UnattendPasses'
+        )) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Cleared $path (oobeSystem must run from Panther unattend on first deploy boot)"
+        }
+    }
+
     $oobeReg = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\OOBE'
     if (-not (Test-Path -LiteralPath $oobeReg)) {
         New-Item -Path $oobeReg -Force | Out-Null

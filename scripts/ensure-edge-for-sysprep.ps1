@@ -5,11 +5,45 @@
 # Per-user Edge without machine provisioning causes 0x80073cf2. Do not launch Edge
 # after provisioning — a user session update breaks sysprep on provisioned packages.
 
+function Get-TargetWindowsServerVersion {
+    switch ($env:WINDOWS_VERSION) {
+        '2025' { return '2025' }
+        '2022' { return '2022' }
+    }
+
+    $caption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
+    if ($caption -match '2025') {
+        return '2025'
+    }
+    if ($caption -match '2022') {
+        return '2022'
+    }
+
+    return '2022'
+}
+
 function Test-EdgeAppxName {
     param([string]$Name)
     return (
         $Name -like 'Microsoft.MicrosoftEdge.Stable*' -or
         $Name -like 'Microsoft.MicrosoftEdgeDevToolsClient*' -or
+        $Name -eq 'Microsoft.MicrosoftEdge' -or
+        $Name -like 'Microsoft.MicrosoftEdge_*'
+    )
+}
+
+function Test-EdgeSysprepBlockingLegacyAppxName {
+    param([string]$Name)
+    if (Test-EdgeStableAppxName -Name $Name) {
+        return $false
+    }
+    # Server 2025 Win32 Edge often leaves DevToolsClient registered per-user after
+    # Remove-AppxPackage -AllUsers; it is not a legacy browser and does not block sysprep.
+    # Keep 2022 on the original strict path (DevToolsClient must be removed).
+    if ($Name -like 'Microsoft.MicrosoftEdgeDevToolsClient*') {
+        return (Get-TargetWindowsServerVersion) -ne '2025'
+    }
+    return (
         $Name -eq 'Microsoft.MicrosoftEdge' -or
         $Name -like 'Microsoft.MicrosoftEdge_*'
     )
@@ -87,6 +121,10 @@ function Get-EdgeStablePackageFolder {
 }
 
 function Remove-EdgeUserRegistrations {
+    foreach ($pkg in @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Microsoft.MicrosoftEdgeDevToolsClient*' })) {
+        Write-Host "Removing Edge DevTools provisioning: $($pkg.DisplayName)"
+        Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
+    }
     foreach ($pkg in @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Where-Object { Test-EdgeAppxName -Name $_.Name })) {
         Write-Host "Removing Edge user registration (AllUsers): $($pkg.PackageFullName)"
         Remove-AppxPackageQuiet -PackageFullName $pkg.PackageFullName -AllUsers | Out-Null
@@ -465,13 +503,20 @@ function Test-EdgeSysprepReady {
 
     $legacyUser = @(
         Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
-            Where-Object {
-                Test-EdgeAppxName -Name $_.Name -and -not (Test-EdgeStableAppxName -Name $_.Name)
-            }
+            Where-Object { Test-EdgeSysprepBlockingLegacyAppxName -Name $_.Name }
     )
     if ($legacyUser) {
         $names = ($legacyUser | Select-Object -ExpandProperty PackageFullName) -join ', '
         return $false, "Legacy Edge packages still registered per-user: $names"
+    }
+
+    $devToolsOnly = @(
+        Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'Microsoft.MicrosoftEdgeDevToolsClient*' }
+    )
+    if ($devToolsOnly -and (Get-TargetWindowsServerVersion) -eq '2025' -and (Test-EdgeWin32Installed)) {
+        $names = ($devToolsOnly | Select-Object -ExpandProperty PackageFullName) -join ', '
+        Write-Warning "Edge DevToolsClient still registered per-user (non-blocking on Server 2025 with Win32 Edge): $names"
     }
 
     $provisioned = Get-EdgeStableProvisionedPackages
