@@ -137,7 +137,8 @@ build_container_disk() {
 
   # Build from the qcow2 directory so we do not copy the full image into build temp.
   containerfile="$(build_mktemp containerfile.XXXXXX)"
-  trap 'rm -f "$containerfile"' RETURN
+  # Expand path when trap is set; RETURN runs after locals are cleared (set -u unbound otherwise).
+  trap "rm -f '$containerfile'" RETURN
   cat >"$containerfile" <<EOF
 # KubeVirt / OpenShift Virtualization container disk (qemu uid 107).
 FROM scratch
