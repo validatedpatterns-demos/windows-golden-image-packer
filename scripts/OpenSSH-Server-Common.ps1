@@ -18,6 +18,23 @@ function Test-OpenSshServerReady {
     Test-Path 'C:\ProgramData\ssh\sshd_config'
 }
 
+function Ensure-OpenSshFirewallRule {
+    # install-sshd.ps1 creates OpenSSH-Server-In-TCP for Private only; virtio NICs on
+    # KubeVirt/OpenShift are often Public (notably on Server 2025), so allow all profiles.
+    $ruleName = 'OpenSSH-Server-In-TCP'
+    $profiles = @('Domain', 'Private', 'Public')
+
+    $fwRule = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+    if (-not $fwRule) {
+        New-NetFirewallRule -Name $ruleName -DisplayName 'OpenSSH Server (sshd)' `
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 `
+            -Profile $profiles | Out-Null
+        return
+    }
+
+    Set-NetFirewallRule -Name $ruleName -Enabled True -Profile $profiles
+}
+
 function Initialize-OpenSshServerLayout {
     param([scriptblock]$Log = { param($m) Write-Host $m })
 

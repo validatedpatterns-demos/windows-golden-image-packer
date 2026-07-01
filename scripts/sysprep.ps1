@@ -443,6 +443,25 @@ function Test-SysprepGeneralizeSucceededDespiteExit {
     return Test-SysprepGeneralizeSucceeded
 }
 
+function Dismount-EspDriveLetters {
+    # Release ESP BCD locks left by bcdboot/sysprep before Repair-GeneralizedBcdStore.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        foreach ($letter in @('S', 'T', 'U', 'V', 'W', 'X')) {
+            $root = "${letter}:\"
+            if (-not (Test-Path $root)) { continue }
+            if (Test-Path (Join-Path $root 'EFI\Microsoft\Boot\BCD')) {
+                & mountvol.exe $root /D *>$null
+            }
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    $global:LASTEXITCODE = 0
+}
+
 function Get-EspBcdDeviceSpec {
     $esp = Get-Partition -ErrorAction SilentlyContinue |
         Where-Object {
@@ -632,6 +651,91 @@ function Get-SysprepWorkerDelaySeconds {
     return 30
 }
 
+function Remove-SysprepWorkerTask {
+    param([string]$TaskName = 'GoldenImageSysprepWorker')
+
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    # schtasks prints "ERROR: The system cannot find the file specified." to stderr when the
+    # task is absent; with $ErrorActionPreference Stop that becomes a terminating NativeCommandError.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & schtasks.exe /Delete /TN $TaskName /F *>$null
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    $global:LASTEXITCODE = 0
+}
+
+function Stage-SysprepWorkerBundle {
+    # Run the worker from ProgramData, not Temp — Server 2025 can block SYSTEM PowerShell in Temp.
+    $workerDir = Join-Path $goldenData 'sysprep-worker'
+    New-Item -ItemType Directory -Path $workerDir -Force | Out-Null
+
+    $tempDir = Join-Path $env:SystemRoot 'Temp'
+    Get-ChildItem -Path (Join-Path $tempDir '*.ps1') -ErrorAction SilentlyContinue |
+        Copy-Item -Destination $workerDir -Force
+
+    $workerScript = Join-Path $workerDir 'sysprep.ps1'
+    if (-not (Test-Path -LiteralPath $workerScript)) {
+        Copy-Item -LiteralPath $PSCommandPath -Destination $workerScript -Force
+    }
+    if (-not (Test-Path -LiteralPath $workerScript)) {
+        throw "Sysprep worker script could not be staged at $workerScript"
+    }
+
+    foreach ($name in @('sysprep-generalize.xml', 'sysprep-oobe.xml')) {
+        $src = Join-Path $tempDir $name
+        if (Test-Path -LiteralPath $src) {
+            Copy-Item -LiteralPath $src -Destination (Join-Path $workerDir $name) -Force
+        }
+    }
+
+    return $workerScript
+}
+
+function New-SysprepWorkerLauncher {
+    param([string]$WorkerScript)
+
+    $launcher = Join-Path $goldenData 'run-sysprep-worker.cmd'
+    $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    @(
+        '@echo off'
+        "`"$psExe`" -NoProfile -ExecutionPolicy Bypass -File `"$WorkerScript`" -Worker"
+    ) | Set-Content -LiteralPath $launcher -Encoding ASCII
+    return $launcher
+}
+
+function Register-SysprepWorkerTask {
+    param(
+        [string]$TaskName,
+        [string]$WorkerScript,
+        [datetime]$RunAt
+    )
+
+    $launcher = New-SysprepWorkerLauncher -WorkerScript $WorkerScript
+    $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$launcher`""
+    $trigger = New-ScheduledTaskTrigger -Once -At $RunAt
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop |
+            Out-Null
+    }
+    catch {
+        throw "Register-ScheduledTask failed for ${TaskName}: $($_.Exception.Message)"
+    }
+
+    # Do not call Get-ScheduledTaskInfo here — on Server 2025 it can throw "The system cannot find
+    # the file specified." for a newly registered task that has never run.
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) {
+        throw "Scheduled task $TaskName was not found after registration"
+    }
+}
+
 function Start-SysprepWorkerProcess {
     # Do not Start-Process the worker immediately — sysprep /generalize breaks WinRM while Packer
     # is still tearing down the inline provisioner script (401 on winrmcp cleanup). Schedule the
@@ -642,40 +746,19 @@ function Start-SysprepWorkerProcess {
     $delaySec = Get-SysprepWorkerDelaySeconds
     $runAt = (Get-Date).AddSeconds($delaySec)
 
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-    try {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        schtasks.exe /Delete /TN $taskName /F | Out-Null
-    }
-    finally {
-        $ErrorActionPreference = $prev
-    }
+    Remove-SysprepWorkerTask -TaskName $taskName
 
-    $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $taskArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker"
-    $action = New-ScheduledTaskAction -Execute $psExe -Argument $taskArgs
-    $trigger = New-ScheduledTaskTrigger -Once -At $runAt
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    $workerScript = Stage-SysprepWorkerBundle
+    Register-SysprepWorkerTask -TaskName $taskName -WorkerScript $workerScript -RunAt $runAt
 
     Write-Host "Scheduled sysprep worker as SYSTEM in ${delaySec}s (task: $taskName; log: $workerLog)"
+    Write-Host "Worker script: $workerScript"
     Write-Host "Run at: $($runAt.ToString('o')) (Packer must finish WinRM teardown before generalize)"
 }
 
 function Invoke-SysprepGeneralizeAndFinalize {
     if ($Worker) {
-        $taskName = 'GoldenImageSysprepWorker'
-        $prev = $ErrorActionPreference
-        $ErrorActionPreference = 'SilentlyContinue'
-        try {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        }
-        finally {
-            $ErrorActionPreference = $prev
-        }
+        Remove-SysprepWorkerTask -TaskName 'GoldenImageSysprepWorker'
     }
 
     $sysprep = 'C:\Windows\System32\Sysprep\sysprep.exe'
@@ -737,7 +820,16 @@ function Invoke-SysprepGeneralizeAndFinalize {
     }
     & $verifyVirtio -AllControlSets
     Remove-VirtioBootStartOverrideAllControlSets
-    Repair-GeneralizedBcdStore
+    Dismount-EspDriveLetters
+    try {
+        Repair-GeneralizedBcdStore
+    }
+    catch {
+        if (-not (Test-SysprepGeneralizeSucceeded)) {
+            throw
+        }
+        Write-Warning "BCD repair after generalize failed (host-side offline fix will run): $($_.Exception.Message)"
+    }
     Set-PostSysprepProductKeyOobe
 
     $global:LASTEXITCODE = 0
@@ -754,7 +846,14 @@ try {
             Remove-Item -LiteralPath $workerLog -Force -ErrorAction SilentlyContinue
         }
         Start-Transcript -Path $workerLog -Force | Out-Null
-        Write-Host "Sysprep worker started at $(Get-Date -Format o)"
+        Write-Host "Sysprep worker started at $(Get-Date -Format o) from $PSCommandPath"
+
+        $workerDir = Join-Path $goldenData 'sysprep-worker'
+        $bundleGeneralize = Join-Path $workerDir 'sysprep-generalize.xml'
+        if (Test-Path -LiteralPath $bundleGeneralize) {
+            $script:generalizeUnattend = $bundleGeneralize
+            Write-Host "Using generalize unattend from worker bundle: $bundleGeneralize"
+        }
     }
 
     if (-not $Worker) {
@@ -854,6 +953,11 @@ catch {
     Save-SysprepDiagnostics $_.Exception.Message
     Write-SysprepDiagnosticLogs
     Write-Host "sysprep.ps1 failed: $($_.Exception.Message)"
+    if (Test-SysprepGeneralizeSucceeded) {
+        Write-Warning 'Generalize succeeded; forcing guest shutdown so Packer can capture the image.'
+        Stop-OrphanSysprepShutdownGuards
+        Invoke-GuestShutdown
+    }
     exit 1
 }
 finally {

@@ -83,7 +83,21 @@ if ($CleanBcdStore) {
     $bcdOnEsp = Join-Path $efiRoot 'EFI\Microsoft\Boot\BCD'
     if (Test-Path -LiteralPath $bcdOnEsp) {
         Write-Host "Removing stale ESP BCD before bcdboot: $bcdOnEsp"
-        Remove-Item -LiteralPath $bcdOnEsp -Force
+        $removed = $false
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $bcdOnEsp -Force -ErrorAction Stop
+                $removed = $true
+                break
+            }
+            catch {
+                Write-Warning "ESP BCD locked (attempt $attempt/5): $($_.Exception.Message)"
+                Start-Sleep -Seconds 2
+            }
+        }
+        if (-not $removed) {
+            throw "Could not remove locked ESP BCD at $bcdOnEsp"
+        }
     }
 }
 $bcdbootArgs = @($windowsRoot, '/s', $efiRoot, '/f', 'UEFI')

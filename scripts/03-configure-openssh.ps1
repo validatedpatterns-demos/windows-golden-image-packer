@@ -129,10 +129,6 @@ Write-Step 'Starting sshd service and firewall rule...'
 Set-Service -Name sshd -StartupType Automatic
 Start-Service -Name sshd
 
-$fwRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
-if (-not $fwRule) {
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' `
-        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
-}
+Ensure-OpenSshFirewallRule
 
 Write-Step 'OpenSSH Server is installed, configured, and running.'
